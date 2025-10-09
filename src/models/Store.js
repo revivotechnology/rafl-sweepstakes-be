@@ -1,41 +1,56 @@
 const mongoose = require('mongoose');
 
 const storeSchema = new mongoose.Schema({
-  shopDomain: {
-    type: String,
-    required: true,
-    unique: true
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
-  accessToken: {
+  storeName: {
     type: String,
     required: true
+  },
+  storeUrl: {
+    type: String,
+    required: false,
+    default: ''
+  },
+  subscriptionTier: {
+    type: String,
+    enum: ['free', 'premium'],
+    default: 'free'
+  },
+  status: {
+    type: String,
+    enum: ['active', 'suspended'],
+    default: 'active'
+  },
+  // Shopify-specific fields (optional)
+  shopifyDomain: {
+    type: String,
+    default: null
+  },
+  shopifyAccessToken: {
+    type: String,
+    default: null
   },
   shopifyStoreId: {
     type: String,
-    required: true
+    default: null
   },
-  email: {
-    type: String,
-    required: true
+  webhookIds: {
+    type: [String],
+    default: []
   },
-  name: {
-    type: String,
-    required: true
-  },
-  plan: {
-    type: String,
-    enum: ['free', 'paid'],
-    default: 'free'
-  },
+  // Billing
   billingStatus: {
     type: String,
     enum: ['active', 'cancelled', 'past_due'],
     default: 'active'
   },
-  webhookIds: [String],
   installedAt: {
     type: Date,
-    default: Date.now
+    default: null
   },
   uninstalledAt: {
     type: Date,
@@ -44,5 +59,9 @@ const storeSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+// Indexes
+storeSchema.index({ userId: 1 });
+storeSchema.index({ shopifyDomain: 1 });
 
 module.exports = mongoose.model('Store', storeSchema);

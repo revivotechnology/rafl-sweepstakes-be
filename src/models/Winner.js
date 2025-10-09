@@ -1,6 +1,11 @@
 const mongoose = require('mongoose');
 
 const winnerSchema = new mongoose.Schema({
+  promoId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Promo',
+    required: true
+  },
   storeId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Store',
@@ -17,11 +22,15 @@ const winnerSchema = new mongoose.Schema({
   },
   customerName: {
     type: String,
-    required: true
+    default: null
   },
   prizeDescription: {
     type: String,
     required: true
+  },
+  prizeAmount: {
+    type: Number,
+    default: 0
   },
   drawnAt: {
     type: Date,
@@ -35,6 +44,14 @@ const winnerSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  claimed: {
+    type: Boolean,
+    default: false
+  },
+  claimedAt: {
+    type: Date,
+    default: null
+  },
   createdBy: {
     type: String,
     required: true
@@ -42,5 +59,11 @@ const winnerSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+// Indexes
+winnerSchema.index({ promoId: 1 });
+winnerSchema.index({ storeId: 1 });
+winnerSchema.index({ customerEmail: 1 });
+winnerSchema.index({ drawnAt: -1 });
 
 module.exports = mongoose.model('Winner', winnerSchema);

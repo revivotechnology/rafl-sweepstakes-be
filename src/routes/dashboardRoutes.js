@@ -6,5 +6,8 @@ const { authenticateToken } = require('../middleware/auth');
 // All routes require authentication
 router.get('/', authenticateToken, dashboardController.getDashboardData);
 
+// Create a new promo
+router.post('/promos', authenticateToken, dashboardController.createPromo);
+
 module.exports = router;
 

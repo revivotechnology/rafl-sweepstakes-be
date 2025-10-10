@@ -37,6 +37,7 @@ const ApiKey = require('./models/ApiKey');
 const authRoutes = require('./routes/authRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const shopifyRoutes = require('./routes/shopifyRoutes');
+const webhookRoutes = require('./routes/webhookRoutes');
 
 // Routes
 app.get('/', (req, res) => {
@@ -57,6 +58,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/auth', shopifyRoutes);
+app.use('/api/webhooks', webhookRoutes);
 
 // Start server
 app.listen(PORT, () => {

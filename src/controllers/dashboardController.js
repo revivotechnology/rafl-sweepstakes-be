@@ -11,8 +11,17 @@ const getDashboardData = async (req, res) => {
     const userId = req.user._id;
     const userRole = req.user.role;
 
-    // Get user's store
-    const store = await Store.findOne({ userId });
+    // Get user's store - prefer Shopify-connected store if available
+    let store = await Store.findOne({ 
+      userId,
+      shopifyDomain: { $ne: null },
+      shopifyAccessToken: { $ne: null }
+    });
+    
+    // If no Shopify-connected store, get any store
+    if (!store) {
+      store = await Store.findOne({ userId });
+    }
 
     if (!store) {
       return res.status(404).json({
@@ -90,7 +99,86 @@ const getDashboardData = async (req, res) => {
   }
 };
 
+// @route   POST /api/dashboard/promos
+// @desc    Create a new promo
+// @access  Private
+const createPromo = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    
+    // Get user's store - prefer Shopify-connected store if available
+    let store = await Store.findOne({ 
+      userId,
+      shopifyDomain: { $ne: null },
+      shopifyAccessToken: { $ne: null }
+    });
+    
+    // If no Shopify-connected store, get any store
+    if (!store) {
+      store = await Store.findOne({ userId });
+    }
+    
+    if (!store) {
+      return res.status(404).json({
+        success: false,
+        message: 'Store not found'
+      });
+    }
+    
+    const {
+      name,
+      description,
+      status = 'active',
+      enablePurchaseEntries = true,
+      entriesPerDollar = 1,
+      prizeAmount = 1000,
+      prizeDescription = 'Cash prize',
+      startDate,
+      endDate
+    } = req.body;
+    
+    // Create new promo
+    const promo = new Promo({
+      storeId: store._id,
+      title: name,
+      description: description || '',
+      status,
+      enablePurchaseEntries,
+      entriesPerDollar,
+      prizeAmount,
+      prizeDescription,
+      startDate: startDate ? new Date(startDate) : new Date(),
+      endDate: endDate ? new Date(endDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days from now
+    });
+    
+    await promo.save();
+    
+    res.status(201).json({
+      success: true,
+      message: 'Promo created successfully',
+      data: {
+        id: promo._id,
+        title: promo.title,
+        status: promo.status,
+        enablePurchaseEntries: promo.enablePurchaseEntries,
+        entriesPerDollar: promo.entriesPerDollar,
+        startDate: promo.startDate,
+        endDate: promo.endDate,
+        createdAt: promo.createdAt
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error creating promo',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
-  getDashboardData
+  getDashboardData,
+  createPromo
 };
 

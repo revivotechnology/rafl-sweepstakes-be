@@ -96,6 +96,13 @@ const handleShopifyCallback = async (req, res) => {
     console.log(`🔄 Processing OAuth for shop: ${shop}`);
     console.log(`📋 OAuth parameters:`, { shop, code: code ? 'present' : 'missing', hmac: hmac ? 'present' : 'missing', state, timestamp });
     
+    // Test network connectivity first
+    const connectivityTest = await shopifyApi.testConnectivity(shop);
+    if (!connectivityTest.success) {
+      console.log(`⚠️ Network connectivity test failed: ${connectivityTest.message}`);
+      console.log(`⚠️ Falling back to DEV MODE due to network issues`);
+    }
+
     // Try real OAuth flow first, fallback to dev mode if network issues
     let tokenData, shopData;
     
@@ -108,8 +115,12 @@ const handleShopifyCallback = async (req, res) => {
       
       // Get shop information
       const shopResponse = await shopifyApi.getShopInfo(shop, tokenData.access_token);
-      shopData = shopResponse.shop;
-      console.log(`✅ Shop data received: ${shopData.name} (${shopData.email})`);
+      if (shopResponse.success && shopResponse.shop) {
+        shopData = shopResponse.shop;
+        console.log(`✅ Shop data received: ${shopData.name} (${shopData.email})`);
+      } else {
+        throw new Error(`Failed to get shop info: ${shopResponse.error || 'Unknown error'}`);
+      }
       
     } catch (error) {
       console.error(`❌ Real OAuth failed with error:`, error);

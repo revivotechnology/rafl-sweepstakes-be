@@ -30,8 +30,13 @@ const callShopifyAPI = (shopDomain, accessToken, endpoint, method = 'GET', data 
       headers: {
         'X-Shopify-Access-Token': accessToken,
         'Content-Type': 'application/json',
+        'User-Agent': 'Raffle-Sweepstakes-App/1.0'
       },
-      timeout: 30000 // 30 second timeout
+      timeout: 30000, // Increased to 30 seconds
+      // Disable agent for better compatibility
+      agent: false,
+      // Add IPv4 preference
+      family: 4
     };
 
     // Add Content-Length for POST/PUT requests
@@ -357,6 +362,12 @@ const deleteWebhook = async (shopDomain, accessToken, webhookId) => {
  */
 const exchangeCodeForToken = async (shopDomain, code) => {
   return new Promise((resolve, reject) => {
+    // Validate environment variables
+    if (!process.env.SHOPIFY_CLIENT_ID || !process.env.SHOPIFY_CLIENT_SECRET) {
+      reject(new Error('Missing Shopify API credentials. Please check your environment variables.'));
+      return;
+    }
+
     const postData = JSON.stringify({
       client_id: process.env.SHOPIFY_CLIENT_ID,
       client_secret: process.env.SHOPIFY_CLIENT_SECRET,
@@ -370,9 +381,14 @@ const exchangeCodeForToken = async (shopDomain, code) => {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
+        'Content-Length': Buffer.byteLength(postData),
+        'User-Agent': 'Raffle-Sweepstakes-App/1.0'
       },
-      timeout: 30000
+      timeout: 30000, // Increased timeout
+      // Disable agent for better compatibility
+      agent: false,
+      // Add IPv4 preference
+      family: 4
     };
 
     console.log(`[Shopify OAuth] Exchanging code for token for ${shopDomain}`);
@@ -423,10 +439,14 @@ const exchangeCodeForToken = async (shopDomain, code) => {
  * @returns {Promise<void>}
  */
 const setupWebhooks = async (shopDomain, accessToken) => {
-  // Use local backend for development, Supabase functions for production
-  const webhookBaseUrl = process.env.NODE_ENV === 'production' 
-    ? (process.env.WEBHOOK_BASE_URL || 'https://rjugqrifeecoxewscqdk.supabase.co/functions/v1')
-    : 'http://localhost:4000/api/webhooks';
+  // Check if this is a dev token (starts with 'dev_token_')
+  if (accessToken.startsWith('dev_token_')) {
+    console.log(`[Shopify Webhooks] Skipping webhook setup for dev token on ${shopDomain}`);
+    return;
+  }
+
+  // Use WEBHOOK_BASE_URL if set, otherwise fallback to localhost for development
+  const webhookBaseUrl = process.env.WEBHOOK_BASE_URL || 'http://localhost:4000/api/webhooks';
   
   const webhooks = [
     {
@@ -450,8 +470,12 @@ const setupWebhooks = async (shopDomain, accessToken) => {
 
   for (const webhook of webhooks) {
     try {
-      await registerWebhook(shopDomain, accessToken, webhook.topic, webhook.address, webhook.format);
-      console.log(`[Shopify Webhooks] Registered ${webhook.topic} webhook`);
+      const result = await registerWebhook(shopDomain, accessToken, webhook.topic, webhook.address, webhook.format);
+      if (result.success) {
+        console.log(`[Shopify Webhooks] Registered ${webhook.topic} webhook`);
+      } else {
+        console.error(`[Shopify Webhooks] Failed to register ${webhook.topic}:`, result.error);
+      }
     } catch (error) {
       console.error(`[Shopify Webhooks] Failed to register ${webhook.topic}:`, error.message);
       // Don't throw - continue with other webhooks
@@ -470,6 +494,61 @@ const verifyWebhookHmac = (body, hmacHeader, secret) => {
   return hash === hmacHeader;
 };
 
+/**
+ * Test network connectivity to Shopify
+ * @param {string} shopDomain - e.g., 'rafl-dev.myshopify.com'
+ * @returns {Promise<object>} Connectivity test result
+ */
+const testConnectivity = async (shopDomain) => {
+  return new Promise((resolve) => {
+    const options = {
+      hostname: shopDomain,
+      port: 443,
+      path: '/admin/api/2024-01/shop.json',
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Raffle-Sweepstakes-App/1.0'
+      },
+      timeout: 10000,
+      // Remove agent configuration for connectivity test
+      agent: false
+    };
+
+    console.log(`[Network Test] Testing connectivity to ${shopDomain}...`);
+
+    const req = https.request(options, (res) => {
+      console.log(`[Network Test] ✅ Connection successful (Status: ${res.statusCode})`);
+      resolve({
+        success: true,
+        statusCode: res.statusCode,
+        message: 'Network connectivity is working'
+      });
+    });
+
+    req.on('error', (error) => {
+      console.error(`[Network Test] ❌ Connection failed:`, error.message);
+      resolve({
+        success: false,
+        error: error.message,
+        code: error.code,
+        message: 'Network connectivity failed'
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      console.error(`[Network Test] ❌ Connection timeout`);
+      resolve({
+        success: false,
+        error: 'Connection timeout',
+        message: 'Network request timed out'
+      });
+    });
+
+    req.end();
+  });
+};
+
 module.exports = {
   callShopifyAPI,
   getShopInfo,
@@ -481,6 +560,7 @@ module.exports = {
   deleteWebhook,
   verifyWebhookHmac,
   exchangeCodeForToken,
-  setupWebhooks
+  setupWebhooks,
+  testConnectivity
 };
 

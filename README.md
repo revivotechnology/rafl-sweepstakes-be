@@ -1,12 +1,12 @@
 # 🎉 Rafl Sweepstakes Backend
 
-Shopify Giveaway App - Express.js + MongoDB
+Shopify Giveaway App - Express.js + Supabase
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 - Node.js (v16+ recommended)
-- MongoDB (running locally or MongoDB Atlas)
+- Supabase project (see MIGRATION_GUIDE.md for setup)
 
 ### Installation
 
@@ -20,16 +20,15 @@ Create a `.env` file in the root directory:
 ```bash
 NODE_ENV=development
 PORT=4000
-MONGODB_URI=mongodb://localhost:27017/rafl-sweepstakes
+SUPABASE_URL=your-supabase-project-url
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 ```
 
-3. **Start MongoDB locally (if using local instance):**
+3. **Set up Supabase database:**
 ```bash
-# On Ubuntu/Debian
-sudo systemctl start mongod
-
-# On macOS with Homebrew
-brew services start mongodb-community
+# Navigate to frontend directory and run migrations
+cd ../rafl-sweepstakes-fe
+npx supabase db push
 ```
 
 ### Running the Application
@@ -52,18 +51,19 @@ The server will start on `http://localhost:4000`
 rafl-sweepstakes-be/
 ├── src/
 │   ├── config/
-│   │   └── database.js       # MongoDB connection
-│   ├── controllers/          # Route handlers (coming soon)
-│   ├── models/               # Mongoose schemas (coming soon)
-│   ├── routes/               # API routes (coming soon)
-│   ├── services/             # Business logic (coming soon)
-│   ├── middleware/           # Custom middleware (coming soon)
-│   ├── utils/                # Helper functions (coming soon)
+│   │   └── supabase.js       # Supabase client configuration
+│   ├── controllers/          # Route handlers
+│   ├── routes/               # API routes
+│   ├── services/             # Business logic
+│   ├── middleware/           # Custom middleware
+│   ├── utils/                # Helper functions
 │   └── server.js             # Express app entry point
 ├── .env                      # Environment variables (create this)
 ├── .env.example              # Environment template
 ├── .gitignore
 ├── package.json
+├── migrate-to-supabase.js    # Data migration script
+├── MIGRATION_GUIDE.md        # Migration documentation
 └── README.md
 ```
 
@@ -81,20 +81,21 @@ curl http://localhost:4000/
 curl http://localhost:4000/health
 ```
 
-## 📋 Next Steps
+## 📋 Features
 
-- [ ] Set up Mongoose models (Store, Entry, Winner)
-- [ ] Implement Shopify OAuth
-- [ ] Create webhook handlers
-- [ ] Build merchant dashboard APIs
-- [ ] Add JWT authentication
-- [ ] Implement winner selection logic
+- ✅ **Supabase Integration** - PostgreSQL database with real-time features
+- ✅ **Supabase Auth** - Built-in authentication and user management
+- ✅ **Shopify OAuth** - Complete Shopify app integration
+- ✅ **Webhook Handlers** - Shopify webhook processing
+- ✅ **Dashboard APIs** - Merchant dashboard data endpoints
+- ✅ **JWT Authentication** - Secure API access
+- ✅ **Winner Selection** - Automated winner selection logic
 
 ## 🛠️ Technologies
 
 - **Express.js** - Web framework
-- **MongoDB** - Database
-- **Mongoose** - MongoDB ODM
+- **Supabase** - PostgreSQL database with real-time features
+- **Supabase Auth** - Authentication and user management
 - **dotenv** - Environment configuration
 - **nodemon** - Development auto-reload
 
@@ -104,14 +105,21 @@ curl http://localhost:4000/health
 |----------|-------------|---------|
 | `NODE_ENV` | Environment (development/production) | development |
 | `PORT` | Server port | 4000 |
-| `MONGODB_URI` | MongoDB connection string | mongodb://localhost:27017/rafl-sweepstakes |
+| `SUPABASE_URL` | Supabase project URL | - |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key | - |
+| `JWT_SECRET` | JWT secret for token signing | - |
 
 ## 🐛 Troubleshooting
 
-**MongoDB Connection Error:**
-- Ensure MongoDB is running
-- Check `MONGODB_URI` in `.env` is correct
-- For local MongoDB: `sudo systemctl status mongod`
+**Supabase Connection Error:**
+- Ensure Supabase project is active
+- Check `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env`
+- Verify network connectivity to Supabase
+
+**Authentication Errors:**
+- Verify Supabase Auth is properly configured
+- Check if user exists in Supabase Auth dashboard
+- Ensure JWT token is valid and not expired
 
 **Port Already in Use:**
 - Change `PORT` in `.env` to another port (e.g., 5000)
@@ -120,7 +128,8 @@ curl http://localhost:4000/health
 ## 📚 Resources
 
 - [Express.js Docs](https://expressjs.com/)
-- [Mongoose Docs](https://mongoosejs.com/)
-- [MongoDB Docs](https://www.mongodb.com/docs/)
+- [Supabase Docs](https://supabase.com/docs)
+- [Supabase Auth Docs](https://supabase.com/docs/guides/auth)
 - [Shopify API Docs](https://shopify.dev/docs/api)
+- [Migration Guide](./MIGRATION_GUIDE.md) - Complete migration documentation
 

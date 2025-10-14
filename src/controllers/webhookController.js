@@ -1,6 +1,4 @@
-const Store = require('../models/Store');
-const Entry = require('../models/Entry');
-const Promo = require('../models/Promo');
+const { supabase } = require('../config/supabase');
 const shopifyApi = require('../services/shopifyApiService');
 
 /**
@@ -10,6 +8,24 @@ const shopifyApi = require('../services/shopifyApiService');
 const handleOrderCreate = async (req, res) => {
   try {
     console.log('📦 Order create webhook received');
+    
+    // Verify webhook signature for security
+    const hmacHeader = req.headers['x-shopify-hmac-sha256'];
+    const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
+    
+    if (webhookSecret && hmacHeader) {
+      const isValid = shopifyApi.verifyWebhookHmac(JSON.stringify(req.body), hmacHeader, webhookSecret);
+      if (!isValid) {
+        console.log('❌ Invalid webhook signature');
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid webhook signature'
+        });
+      }
+      console.log('✅ Webhook signature verified');
+    } else {
+      console.log('⚠️ Skipping HMAC verification (development mode)');
+    }
     
     // Extract order data from webhook payload
     const order = req.body;
@@ -32,8 +48,14 @@ const handleOrderCreate = async (req, res) => {
       });
     }
     
-    const store = await Store.findOne({ shopifyDomain: shopDomain });
-    if (!store) {
+    // Find store by shopify domain
+    const { data: store, error: storeError } = await supabase
+      .from('stores')
+      .select('*')
+      .eq('shopify_domain', shopDomain)
+      .single();
+    
+    if (storeError || !store) {
       console.error(`Store not found for domain: ${shopDomain}`);
       return res.status(404).json({
         success: false,
@@ -43,7 +65,7 @@ const handleOrderCreate = async (req, res) => {
     
     // Extract order details
     const orderData = {
-      storeId: store._id,
+      storeId: store.id,
       shopifyOrderId: order.id.toString(),
       shopifyOrderNumber: order.order_number,
       customerEmail: order.email || order.customer?.email,
@@ -67,53 +89,122 @@ const handleOrderCreate = async (req, res) => {
     
     console.log(`Order details: ${orderData.customerEmail} - $${orderData.totalPrice} ${orderData.currency}`);
     
-    // Save order data to Entry model (for giveaway tracking)
+    // Find or create shopify_shop record
+    let { data: shopifyShop, error: shopifyShopError } = await supabase
+      .from('shopify_shops')
+      .select('*')
+      .eq('store_id', store.id)
+      .eq('shop_domain', shopDomain)
+      .single();
+
+    if (shopifyShopError && shopifyShopError.code !== 'PGRST116') {
+      console.error('Error finding shopify_shop:', shopifyShopError);
+    }
+
+    if (!shopifyShop) {
+      // Create shopify_shop record
+      const { data: newShopifyShop, error: createShopifyShopError } = await supabase
+        .from('shopify_shops')
+        .insert({
+          store_id: store.id,
+          shop_domain: shopDomain,
+          access_token: store.shopify_access_token || 'dev_token',
+          webhook_verified: true
+        })
+        .select()
+        .single();
+
+      if (createShopifyShopError) {
+        console.error('Error creating shopify_shop:', createShopifyShopError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to create shopify shop record',
+          error: createShopifyShopError.message
+        });
+      }
+      shopifyShop = newShopifyShop;
+    }
+
+    // Save order data to purchases table
+    const { data: purchase, error: purchaseError } = await supabase
+      .from('purchases')
+      .upsert({
+        shopify_shop_id: shopifyShop.id,
+        shopify_order_id: orderData.shopifyOrderId,
+        customer_email: orderData.customerEmail,
+        total_amount_usd: orderData.totalPrice,
+        currency: orderData.currency,
+        order_date: orderData.orderDate.toISOString()
+      }, {
+        onConflict: 'shopify_shop_id,shopify_order_id'
+      })
+      .select()
+      .single();
+
+    if (purchaseError) {
+      console.error('Error saving purchase:', purchaseError);
+    }
+    
     // Check if customer email exists and matches any active promos
     if (orderData.customerEmail) {
-      const activePromos = await Promo.find({ 
-        storeId: store._id, 
-        status: 'active',
-        enablePurchaseEntries: true 
-      });
+      const { data: activePromos, error: promosError } = await supabase
+        .from('promos')
+        .select('*')
+        .eq('store_id', store.id)
+        .eq('status', 'active')
+        .eq('enable_purchase_entries', true);
       
-      if (activePromos.length > 0) {
+      if (promosError) {
+        console.error('Error fetching active promos:', promosError);
+      } else if (activePromos && activePromos.length > 0) {
         for (const promo of activePromos) {
           // Check if customer already has an entry for this promo
-          const existingEntry = await Entry.findOne({
-            promoId: promo._id,
-            customerEmail: orderData.customerEmail
-          });
+          const { data: existingEntry, error: entryError } = await supabase
+            .from('entries')
+            .select('*')
+            .eq('promo_id', promo.id)
+            .eq('customer_email', orderData.customerEmail)
+            .single();
+          
+          if (entryError && entryError.code !== 'PGRST116') { // PGRST116 = no rows returned
+            console.error('Error checking existing entry:', entryError);
+            continue;
+          }
           
           if (!existingEntry) {
             // Create new entry for purchase
-            const entry = new Entry({
-              promoId: promo._id,
-              storeId: store._id,
-              customerEmail: orderData.customerEmail,
-              customerName: orderData.customerName,
-              entryCount: Math.floor(orderData.totalPrice * promo.entriesPerDollar),
-              source: 'purchase',
-              orderId: orderData.shopifyOrderId,
-              orderTotal: orderData.totalPrice,
-              metadata: {
-                orderNumber: orderData.shopifyOrderNumber,
-                currency: orderData.currency,
-                orderDate: orderData.orderDate,
-                lineItems: orderData.lineItems
-              }
-            });
+            const { data: newEntry, error: createEntryError } = await supabase
+              .from('entries')
+              .insert({
+                promo_id: promo.id,
+                store_id: store.id,
+                customer_email: orderData.customerEmail,
+                customer_name: orderData.customerName,
+                entry_count: Math.floor(orderData.totalPrice * promo.entries_per_dollar),
+                source: 'purchase',
+                order_id: orderData.shopifyOrderId,
+                order_total: orderData.totalPrice,
+                metadata: {
+                  orderNumber: orderData.shopifyOrderNumber,
+                  currency: orderData.currency,
+                  orderDate: orderData.orderDate,
+                  lineItems: orderData.lineItems
+                }
+              })
+              .select()
+              .single();
             
-            await entry.save();
-            console.log(`✅ Created entry for ${orderData.customerEmail}: ${entry.entryCount} entries`);
+            if (createEntryError) {
+              console.error('Error creating entry:', createEntryError);
+            } else {
+              console.log(`✅ Created entry for ${orderData.customerEmail}: ${newEntry.entry_count} entries`);
+            }
           } else {
-            console.log(`⏭️ Customer ${orderData.customerEmail} already has entry for promo ${promo._id}`);
+            console.log(`⏭️ Customer ${orderData.customerEmail} already has entry for promo ${promo.id}`);
           }
         }
       }
     }
-    
-    // TODO: If you want to store full order data separately, create an Order model
-    // For now, we're storing order info in the Entry metadata
     
     return res.status(200).json({
       success: true,
@@ -150,46 +241,51 @@ const handleOrderUpdate = async (req, res) => {
       });
     }
     
-    console.log(`Processing order update: ${order.id} (${order.order_number})`);
-    
-    // Find store
+    // Find store by shop domain
     const shopDomain = req.headers['x-shopify-shop-domain'];
-    const store = await Store.findOne({ shopifyDomain: shopDomain });
+    if (!shopDomain) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing shop domain in headers'
+      });
+    }
     
-    if (!store) {
+    // Find store by shopify domain
+    const { data: store, error: storeError } = await supabase
+      .from('stores')
+      .select('*')
+      .eq('shopify_domain', shopDomain)
+      .single();
+    
+    if (storeError || !store) {
+      console.error(`Store not found for domain: ${shopDomain}`);
       return res.status(404).json({
         success: false,
         message: 'Store not found'
       });
     }
     
-    // Update existing entry if it exists
-    if (order.email) {
-      const entry = await Entry.findOne({
-        storeId: store._id,
-        orderId: order.id.toString()
-      });
-      
-      if (entry) {
-        // Update entry with new order details
-        entry.orderTotal = parseFloat(order.total_price || 0);
-        entry.metadata = {
-          ...entry.metadata,
-          orderNumber: order.order_number,
-          currency: order.currency,
-          orderDate: new Date(order.updated_at),
-          financialStatus: order.financial_status,
-          fulfillmentStatus: order.fulfillment_status
-        };
-        
-        await entry.save();
-        console.log(`✅ Updated entry for order ${order.id}`);
-      }
+    // Update purchase record
+    const { data: updatedPurchase, error: updateError } = await supabase
+      .from('purchases')
+      .update({
+        customer_email: order.email || order.customer?.email,
+        total_amount_usd: parseFloat(order.total_price || 0),
+        currency: order.currency || 'USD',
+        order_date: new Date(order.created_at).toISOString()
+      })
+      .eq('shopify_shop_id', store.id)
+      .eq('shopify_order_id', order.id.toString())
+      .select()
+      .single();
+    
+    if (updateError) {
+      console.error('Error updating purchase:', updateError);
     }
     
     return res.status(200).json({
       success: true,
-      message: 'Order update processed successfully',
+      message: 'Order updated successfully',
       orderId: order.id
     });
     
@@ -204,38 +300,69 @@ const handleOrderUpdate = async (req, res) => {
 };
 
 /**
- * Verify webhook HMAC signature
- * @param {string} body - Raw request body
- * @param {string} hmacHeader - HMAC header from request
- * @param {string} secret - Shopify webhook secret
- * @returns {boolean} True if signature is valid
+ * Handle app uninstall webhook
+ * POST /api/webhooks/app/uninstalled
  */
-const verifyWebhookSignature = (req, res, next) => {
-  const hmacHeader = req.headers['x-shopify-hmac-sha256'];
-  const body = JSON.stringify(req.body);
-  const secret = process.env.SHOPIFY_CLIENT_SECRET;
-  
-  if (!hmacHeader || !secret) {
-    console.log('⚠️ Skipping HMAC verification (missing header or secret)');
-    return next();
-  }
-  
-  const isValid = shopifyApi.verifyWebhookHmac(body, hmacHeader, secret);
-  
-  if (!isValid) {
-    console.error('❌ Invalid webhook signature');
-    return res.status(401).json({
+const handleAppUninstall = async (req, res) => {
+  try {
+    console.log('🗑️ App uninstall webhook received');
+    
+    const shopDomain = req.headers['x-shopify-shop-domain'];
+    if (!shopDomain) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing shop domain in headers'
+      });
+    }
+    
+    // Find and update store
+    const { data: store, error: storeError } = await supabase
+      .from('stores')
+      .select('*')
+      .eq('shopify_domain', shopDomain)
+      .single();
+    
+    if (storeError || !store) {
+      console.error(`Store not found for domain: ${shopDomain}`);
+      return res.status(404).json({
+        success: false,
+        message: 'Store not found'
+      });
+    }
+    
+    // Update store status
+    const { error: updateError } = await supabase
+      .from('stores')
+      .update({
+        status: 'suspended',
+        uninstalled_at: new Date().toISOString(),
+        shopify_access_token: null
+      })
+      .eq('id', store.id);
+    
+    if (updateError) {
+      console.error('Error updating store on uninstall:', updateError);
+    }
+    
+    console.log(`✅ Store ${shopDomain} marked as uninstalled`);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'App uninstall processed successfully'
+    });
+    
+  } catch (error) {
+    console.error('App uninstall webhook error:', error);
+    res.status(500).json({
       success: false,
-      message: 'Invalid webhook signature'
+      message: 'Error processing app uninstall webhook',
+      error: error.message
     });
   }
-  
-  console.log('✅ Webhook signature verified');
-  next();
 };
 
 module.exports = {
   handleOrderCreate,
   handleOrderUpdate,
-  verifyWebhookSignature
+  handleAppUninstall
 };

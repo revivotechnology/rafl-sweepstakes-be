@@ -349,6 +349,116 @@ const deleteWebhook = async (shopDomain, accessToken, webhookId) => {
  * @param {string} secret - Shopify API secret
  * @returns {boolean} True if signature is valid
  */
+/**
+ * Exchange authorization code for access token
+ * @param {string} shopDomain - e.g., 'rafl-dev.myshopify.com'
+ * @param {string} code - Authorization code from Shopify
+ * @returns {Promise<object>} Token response
+ */
+const exchangeCodeForToken = async (shopDomain, code) => {
+  return new Promise((resolve, reject) => {
+    const postData = JSON.stringify({
+      client_id: process.env.SHOPIFY_CLIENT_ID,
+      client_secret: process.env.SHOPIFY_CLIENT_SECRET,
+      code: code
+    });
+
+    const options = {
+      hostname: shopDomain,
+      port: 443,
+      path: '/admin/oauth/access_token',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      },
+      timeout: 30000
+    };
+
+    console.log(`[Shopify OAuth] Exchanging code for token for ${shopDomain}`);
+
+    const req = https.request(options, (res) => {
+      let responseData = '';
+
+      res.on('data', (chunk) => {
+        responseData += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const data = JSON.parse(responseData);
+          if (res.statusCode === 200) {
+            console.log(`[Shopify OAuth] Token exchange successful for ${shopDomain}`);
+            resolve(data);
+          } else {
+            console.error(`[Shopify OAuth] Token exchange failed: ${res.statusCode}`, data);
+            reject(new Error(`Token exchange failed: ${data.error || 'Unknown error'}`));
+          }
+        } catch (error) {
+          console.error(`[Shopify OAuth] Invalid JSON response:`, responseData);
+          reject(new Error('Invalid response from Shopify'));
+        }
+      });
+    });
+
+    req.on('error', (error) => {
+      console.error(`[Shopify OAuth] Request error:`, error);
+      reject(error);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Request timeout'));
+    });
+
+    req.write(postData);
+    req.end();
+  });
+};
+
+/**
+ * Setup webhooks for a Shopify store
+ * @param {string} shopDomain - e.g., 'rafl-dev.myshopify.com'
+ * @param {string} accessToken - Shopify access token
+ * @returns {Promise<void>}
+ */
+const setupWebhooks = async (shopDomain, accessToken) => {
+  // Use local backend for development, Supabase functions for production
+  const webhookBaseUrl = process.env.NODE_ENV === 'production' 
+    ? (process.env.WEBHOOK_BASE_URL || 'https://rjugqrifeecoxewscqdk.supabase.co/functions/v1')
+    : 'http://localhost:4000/api/webhooks';
+  
+  const webhooks = [
+    {
+      topic: 'orders/create',
+      address: `${webhookBaseUrl}/orders/create`,
+      format: 'json'
+    },
+    {
+      topic: 'orders/updated',
+      address: `${webhookBaseUrl}/orders/updated`,
+      format: 'json'
+    },
+    {
+      topic: 'app/uninstalled',
+      address: `${webhookBaseUrl}/app/uninstalled`,
+      format: 'json'
+    }
+  ];
+
+  console.log(`[Shopify Webhooks] Setting up webhooks for ${shopDomain}`);
+
+  for (const webhook of webhooks) {
+    try {
+      await registerWebhook(shopDomain, accessToken, webhook.topic, webhook.address, webhook.format);
+      console.log(`[Shopify Webhooks] Registered ${webhook.topic} webhook`);
+    } catch (error) {
+      console.error(`[Shopify Webhooks] Failed to register ${webhook.topic}:`, error.message);
+      // Don't throw - continue with other webhooks
+    }
+  }
+};
+
 const verifyWebhookHmac = (body, hmacHeader, secret) => {
   const crypto = require('crypto');
   
@@ -369,6 +479,8 @@ module.exports = {
   registerWebhook,
   getWebhooks,
   deleteWebhook,
-  verifyWebhookHmac
+  verifyWebhookHmac,
+  exchangeCodeForToken,
+  setupWebhooks
 };
 

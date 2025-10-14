@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
-const connectDB = require('./config/database');
+const { testConnection } = require('./config/supabase');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -22,16 +22,8 @@ app.use(session({
   cookie: { secure: false } // Set to true in production with HTTPS
 }));
 
-// Connect to MongoDB
-connectDB();
-
-// Import models
-const User = require('./models/User');
-const Store = require('./models/Store');
-const Promo = require('./models/Promo');
-const Entry = require('./models/Entry');
-const Winner = require('./models/Winner');
-const ApiKey = require('./models/ApiKey');
+// Test Supabase connection
+testConnection();
 
 // Import routes
 const authRoutes = require('./routes/authRoutes');
@@ -50,7 +42,7 @@ app.get('/api/health', (req, res) => {
     success: true,
     message: 'Server is running',
     timestamp: new Date().toISOString(),
-    database: 'connected'
+    database: 'supabase'
   });
 });
 

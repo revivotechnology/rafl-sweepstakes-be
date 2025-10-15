@@ -1,5 +1,18 @@
 const { supabase } = require('../config/supabase');
+const { createClient } = require('@supabase/supabase-js');
 const crypto = require('crypto');
+
+// Create admin client with service role key that bypasses RLS
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  }
+);
 
 /**
  * Select a random winner for a promo
@@ -24,16 +37,36 @@ const selectWinner = async (req, res) => {
       });
     }
 
-    // Verify user has access to this promo
-    const { data: promo, error: promoError } = await supabase
-      .from('promos')
-      .select(`
-        *,
-        stores!inner(user_id)
-      `)
-      .eq('id', promoId)
-      .eq('stores.user_id', userId)
-      .single();
+    // Check if user is admin or has access to this promo
+    const userRole = req.user?.role;
+    let promo, promoError;
+
+    if (userRole === 'admin') {
+      // Admin can access any promo
+      const { data, error } = await supabase
+        .from('promos')
+        .select(`
+          *,
+          stores!inner(*)
+        `)
+        .eq('id', promoId)
+        .single();
+      promo = data;
+      promoError = error;
+    } else {
+      // Regular users can only access their own promos
+      const { data, error } = await supabase
+        .from('promos')
+        .select(`
+          *,
+          stores!inner(user_id)
+        `)
+        .eq('id', promoId)
+        .eq('stores.user_id', userId)
+        .single();
+      promo = data;
+      promoError = error;
+    }
 
     if (promoError || !promo) {
       return res.status(404).json({
@@ -50,8 +83,8 @@ const selectWinner = async (req, res) => {
       });
     }
 
-    // Check if there's already a winner for this promo
-    const { data: existingWinner, error: winnerError } = await supabase
+    // Check if there's already a winner for this promo (use admin client for admin users)
+    const { data: existingWinner, error: winnerError } = await clientToUse
       .from('winners')
       .select('id')
       .eq('promo_id', promoId)
@@ -72,8 +105,9 @@ const selectWinner = async (req, res) => {
       });
     }
 
-    // Get all entries for this promo
-    const { data: entries, error: entriesError } = await supabase
+    // Get all entries for this promo (use admin client for admin users)
+    const clientToUse = userRole === 'admin' ? supabaseAdmin : supabase;
+    const { data: entries, error: entriesError } = await clientToUse
       .from('entries')
       .select('*')
       .eq('promo_id', promoId);
@@ -115,8 +149,8 @@ const selectWinner = async (req, res) => {
     
     const winningEntry = weightedEntries[randomIndex];
 
-    // Create winner record
-    const { data: winner, error: createWinnerError } = await supabase
+    // Create winner record (use admin client for admin users)
+    const { data: winner, error: createWinnerError } = await clientToUse
       .from('winners')
       .insert({
         promo_id: promoId,
@@ -142,8 +176,8 @@ const selectWinner = async (req, res) => {
       });
     }
 
-    // Update promo status to 'ended'
-    const { error: updatePromoError } = await supabase
+    // Update promo status to 'ended' (use admin client for admin users)
+    const { error: updatePromoError } = await clientToUse
       .from('promos')
       .update({ 
         status: 'ended',
@@ -203,16 +237,36 @@ const getWinnersForPromo = async (req, res) => {
       });
     }
 
-    // Verify user has access to this promo
-    const { data: promo, error: promoError } = await supabase
-      .from('promos')
-      .select(`
-        *,
-        stores!inner(user_id)
-      `)
-      .eq('id', promoId)
-      .eq('stores.user_id', userId)
-      .single();
+    // Check if user is admin or has access to this promo
+    const userRole = req.user?.role;
+    let promo, promoError;
+
+    if (userRole === 'admin') {
+      // Admin can access any promo
+      const { data, error } = await supabase
+        .from('promos')
+        .select(`
+          *,
+          stores!inner(*)
+        `)
+        .eq('id', promoId)
+        .single();
+      promo = data;
+      promoError = error;
+    } else {
+      // Regular users can only access their own promos
+      const { data, error } = await supabase
+        .from('promos')
+        .select(`
+          *,
+          stores!inner(user_id)
+        `)
+        .eq('id', promoId)
+        .eq('stores.user_id', userId)
+        .single();
+      promo = data;
+      promoError = error;
+    }
 
     if (promoError || !promo) {
       return res.status(404).json({

@@ -116,7 +116,7 @@ const createAdminManualEntry = async (req, res) => {
     }
 
     const { email, promoId, source = 'direct' } = req.body;
-    const entryCount = getAMOEEntries(); // AMOE entries get max entries (1000)
+    const entryCount = 1; // Manual entries are always 1 entry
 
     if (!email || !promoId) {
       return res.status(400).json({
@@ -176,15 +176,12 @@ const createAdminManualEntry = async (req, res) => {
       console.error('Error checking existing entries:', existingError);
     }
 
-    // Check if customer already has AMOE entry (max entries)
+    // Check if customer already has a manual entry for this promo
     if (existingEntries && existingEntries.length > 0) {
-      const totalExistingEntries = existingEntries.reduce((sum, entry) => sum + entry.entry_count, 0);
-      if (totalExistingEntries >= getMaxEntriesPerCustomer()) {
-        return res.status(409).json({
-          success: false,
-          message: `Customer ${email} already has the maximum entries (${getMaxEntriesPerCustomer()}) for this promo.`
-        });
-      }
+      return res.status(409).json({
+        success: false,
+        message: `Entry already exists for ${email} in this promo. Please use a different email address.`
+      });
     }
 
     // Create entry using admin client

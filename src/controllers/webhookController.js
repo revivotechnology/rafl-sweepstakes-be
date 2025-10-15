@@ -1,5 +1,6 @@
 const { supabase } = require('../config/supabase');
 const shopifyApi = require('../services/shopifyApiService');
+const { calculateEntriesToAdd, getMaxEntriesPerCustomer } = require('../utils/entryUtils');
 
 /**
  * Handle order create webhook
@@ -23,13 +24,30 @@ const handleOrderCreate = async (req, res) => {
         console.log('❌ Invalid webhook signature');
         console.log('Expected HMAC:', hmacHeader);
         console.log('Webhook secret configured:', !!webhookSecret);
-        // Don't return error in development - just log it
-        console.log('⚠️ Continuing in development mode despite invalid signature');
+        
+        // In production, reject invalid signatures
+        if (process.env.NODE_ENV === 'production') {
+          return res.status(401).json({
+            success: false,
+            message: 'Invalid webhook signature'
+          });
+        } else {
+          // Only continue in development mode
+          console.log('⚠️ Continuing in development mode despite invalid signature');
+        }
       } else {
         console.log('✅ Webhook signature verified');
       }
     } else {
       console.log('⚠️ Skipping HMAC verification (development mode)');
+      
+      // In production, require webhook secret
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(401).json({
+          success: false,
+          message: 'Webhook secret required in production'
+        });
+      }
     }
     
     // Extract order data from webhook payload
@@ -165,53 +183,63 @@ const handleOrderCreate = async (req, res) => {
         console.error('Error fetching active promos:', promosError);
       } else if (activePromos && activePromos.length > 0) {
         for (const promo of activePromos) {
-          // Check if customer already has an entry for this promo
-          const { data: existingEntry, error: entryError } = await supabase
+          // Get all existing entries for this customer and promo
+          const { data: existingEntries, error: entryError } = await supabase
             .from('entries')
             .select('*')
             .eq('promo_id', promo.id)
-            .eq('customer_email', orderData.customerEmail)
-            .single();
+            .eq('customer_email', orderData.customerEmail);
           
-          if (entryError && entryError.code !== 'PGRST116') { // PGRST116 = no rows returned
-            console.error('Error checking existing entry:', entryError);
+          if (entryError) {
+            console.error('Error checking existing entries:', entryError);
             continue;
           }
           
-          if (!existingEntry) {
-            // Create new entry for purchase
-            const crypto = require('crypto');
-            const hashedEmail = crypto.createHash('sha256').update(orderData.customerEmail).digest('hex');
-            
-            const { data: newEntry, error: createEntryError } = await supabase
-              .from('entries')
-              .insert({
-                promo_id: promo.id,
-                store_id: store.id,
-                customer_email: orderData.customerEmail,
-                hashed_email: hashedEmail,
-                customer_name: orderData.customerName,
-                entry_count: Math.floor(orderData.totalPrice * promo.entries_per_dollar),
-                source: 'purchase',
-                order_id: orderData.shopifyOrderId,
-                order_total: orderData.totalPrice,
-                metadata: {
-                  orderNumber: orderData.shopifyOrderNumber,
-                  currency: orderData.currency,
-                  orderDate: orderData.orderDate,
-                  lineItems: orderData.lineItems
-                }
-              })
-              .select()
-              .single();
-            
-            if (createEntryError) {
-              console.error('Error creating entry:', createEntryError);
-            } else {
-              console.log(`✅ Created entry for ${orderData.customerEmail}: ${newEntry.entry_count} entries`);
-            }
+          // Calculate how many entries to add (considering max limit)
+          const entriesToAdd = calculateEntriesToAdd(
+            orderData.totalPrice, 
+            existingEntries || [], 
+            promo.entries_per_dollar, 
+            getMaxEntriesPerCustomer()
+          );
+          
+          if (entriesToAdd === 0) {
+            console.log(`⏭️ Customer ${orderData.customerEmail} has reached max entries (${getMaxEntriesPerCustomer()}) for promo ${promo.id}`);
+            continue;
+          }
+          
+          // Create new entry for this purchase
+          const crypto = require('crypto');
+          const hashedEmail = crypto.createHash('sha256').update(orderData.customerEmail).digest('hex');
+          
+          const { data: newEntry, error: createEntryError } = await supabase
+            .from('entries')
+            .insert({
+              promo_id: promo.id,
+              store_id: store.id,
+              customer_email: orderData.customerEmail,
+              hashed_email: hashedEmail,
+              customer_name: orderData.customerName,
+              entry_count: entriesToAdd,
+              source: 'purchase',
+              order_id: orderData.shopifyOrderId,
+              order_total: orderData.totalPrice,
+              metadata: {
+                orderNumber: orderData.shopifyOrderNumber,
+                currency: orderData.currency,
+                orderDate: orderData.orderDate,
+                lineItems: orderData.lineItems,
+                maxEntriesReached: entriesToAdd < Math.floor(orderData.totalPrice * promo.entries_per_dollar)
+              }
+            })
+            .select()
+            .single();
+          
+          if (createEntryError) {
+            console.error('Error creating entry:', createEntryError);
           } else {
-            console.log(`⏭️ Customer ${orderData.customerEmail} already has entry for promo ${promo.id}`);
+            const totalEntries = (existingEntries || []).reduce((sum, entry) => sum + entry.entry_count, 0) + entriesToAdd;
+            console.log(`✅ Added ${entriesToAdd} entries for ${orderData.customerEmail} (Total: ${totalEntries}/${getMaxEntriesPerCustomer()})`);
           }
         }
       }
@@ -242,6 +270,42 @@ const handleOrderCreate = async (req, res) => {
 const handleOrderUpdate = async (req, res) => {
   try {
     console.log('📝 Order update webhook received');
+    
+    // Verify webhook signature for security
+    const hmacHeader = req.headers['x-shopify-hmac-sha256'];
+    const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
+    
+    if (webhookSecret && hmacHeader) {
+      // Get raw body for HMAC verification
+      const rawBody = JSON.stringify(req.body);
+      const isValid = shopifyApi.verifyWebhookHmac(rawBody, hmacHeader, webhookSecret);
+      if (!isValid) {
+        console.log('❌ Invalid webhook signature');
+        
+        // In production, reject invalid signatures
+        if (process.env.NODE_ENV === 'production') {
+          return res.status(401).json({
+            success: false,
+            message: 'Invalid webhook signature'
+          });
+        } else {
+          // Only continue in development mode
+          console.log('⚠️ Continuing in development mode despite invalid signature');
+        }
+      } else {
+        console.log('✅ Webhook signature verified');
+      }
+    } else {
+      console.log('⚠️ Skipping HMAC verification (development mode)');
+      
+      // In production, require webhook secret
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(401).json({
+          success: false,
+          message: 'Webhook secret required in production'
+        });
+      }
+    }
     
     const order = req.body;
     
@@ -318,6 +382,42 @@ const handleOrderUpdate = async (req, res) => {
 const handleAppUninstall = async (req, res) => {
   try {
     console.log('🗑️ App uninstall webhook received');
+    
+    // Verify webhook signature for security
+    const hmacHeader = req.headers['x-shopify-hmac-sha256'];
+    const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
+    
+    if (webhookSecret && hmacHeader) {
+      // Get raw body for HMAC verification
+      const rawBody = JSON.stringify(req.body);
+      const isValid = shopifyApi.verifyWebhookHmac(rawBody, hmacHeader, webhookSecret);
+      if (!isValid) {
+        console.log('❌ Invalid webhook signature');
+        
+        // In production, reject invalid signatures
+        if (process.env.NODE_ENV === 'production') {
+          return res.status(401).json({
+            success: false,
+            message: 'Invalid webhook signature'
+          });
+        } else {
+          // Only continue in development mode
+          console.log('⚠️ Continuing in development mode despite invalid signature');
+        }
+      } else {
+        console.log('✅ Webhook signature verified');
+      }
+    } else {
+      console.log('⚠️ Skipping HMAC verification (development mode)');
+      
+      // In production, require webhook secret
+      if (process.env.NODE_ENV === 'production') {
+        return res.status(401).json({
+          success: false,
+          message: 'Webhook secret required in production'
+        });
+      }
+    }
     
     const shopDomain = req.headers['x-shopify-shop-domain'];
     if (!shopDomain) {

@@ -101,18 +101,28 @@ const authenticateToken = async (req, res, next) => {
       });
     }
 
+    // Get user's role from user_roles table
+    const { data: userRole, error: roleError } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .single();
+
+    // Determine user role (prioritize database role over metadata)
+    const userRoleFromDB = userRole?.role || user.user_metadata?.role || 'merchant';
+
     // Attach user to request
     req.user = {
       id: user.id,
       email: user.email,
-      role: user.user_metadata?.role || 'merchant',
+      role: userRoleFromDB,
       name: user.user_metadata?.name || user.email,
       emailVerified: user.email_confirmed_at ? true : false,
       lastLogin: user.last_sign_in_at,
       isActive: user.user_metadata?.isActive !== false
     };
 
-    console.log(`✅ Supabase JWT authenticated for user: ${user.email}`);
+    console.log(`✅ Supabase JWT authenticated for user: ${user.email} with role: ${userRoleFromDB}`);
     next();
   } catch (error) {
     console.error('Authentication error:', error);

@@ -30,6 +30,9 @@ const authRoutes = require('./routes/authRoutes');
 const dashboardRoutes = require('./routes/dashboardRoutes');
 const shopifyRoutes = require('./routes/shopifyRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
+const entryRoutes = require('./routes/entryRoutes');
+const winnerRoutes = require('./routes/winnerRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 // Routes
 app.get('/', (req, res) => {
@@ -51,6 +54,9 @@ app.use('/api/auth', authRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/auth', shopifyRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/entries', entryRoutes);
+app.use('/api/winners', winnerRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Start server
 app.listen(PORT, () => {

@@ -162,12 +162,22 @@ const signin = async (req, res) => {
       });
     }
 
+    // Get user's role from user_roles table
+    const { data: userRole, error: roleError } = await supabase
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', authData.user.id)
+      .single();
+
     // Get user's store
     const { data: storeData, error: storeError } = await supabase
       .from('stores')
       .select('*')
       .eq('user_id', authData.user.id)
       .single();
+
+    // Determine user role (prioritize database role over metadata)
+    const userRoleFromDB = userRole?.role || authData.user.user_metadata?.role || 'merchant';
 
     // Return response
     res.status(200).json({
@@ -177,7 +187,7 @@ const signin = async (req, res) => {
         id: authData.user.id,
         email: authData.user.email,
         name: authData.user.user_metadata?.name || authData.user.email,
-        role: authData.user.user_metadata?.role || 'merchant',
+        role: userRoleFromDB,
         emailVerified: !!authData.user.email_confirmed_at
       },
       store: storeData ? {

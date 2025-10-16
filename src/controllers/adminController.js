@@ -287,6 +287,18 @@ const exportEntriesCSV = async (req, res) => {
     // Create CSV content
     const csvHeader = 'Email,Entry Count,Source,Order ID,Order Total,Is Manual,Created At\n';
     const csvRows = entries.map(entry => {
+      // Format date to be more human-readable without commas to avoid CSV splitting
+      const createdDate = new Date(entry.created_at);
+      const formattedDate = createdDate.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      }).replace(',', '') + ' at ' + createdDate.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+
       return [
         entry.customer_email,
         entry.entry_count,
@@ -294,7 +306,7 @@ const exportEntriesCSV = async (req, res) => {
         entry.order_id || '',
         entry.order_total || 0,
         entry.is_manual ? 'Yes' : 'No',
-        new Date(entry.created_at).toISOString()
+        formattedDate
       ].join(',');
     }).join('\n');
 
@@ -348,15 +360,27 @@ const exportWinnersCSV = async (req, res) => {
     // Create CSV content
     const csvHeader = 'Winner Email,Winner Name,Store Name,Store URL,Promo Title,Prize Amount,Prize Description,Drawn At\n';
     const csvRows = winners.map(winner => {
+      // Format date to be more human-readable without commas to avoid CSV splitting
+      const drawnDate = new Date(winner.drawn_at);
+      const formattedDate = drawnDate.toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric'
+      }).replace(',', '') + ' at ' + drawnDate.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+
       return [
         winner.customer_email,
         winner.customer_name || '',
         winner.stores?.store_name || '',
         winner.stores?.store_url || '',
         winner.promos?.title || '',
-        winner.promos?.prize_amount || 0,
+        `$${winner.promos?.prize_amount || 0}`,
         winner.prize_description || '',
-        new Date(winner.drawn_at).toISOString()
+        formattedDate
       ].join(',');
     }).join('\n');
 

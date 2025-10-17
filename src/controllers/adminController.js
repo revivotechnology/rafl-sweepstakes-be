@@ -1,6 +1,8 @@
 const { supabase } = require('../config/supabase');
 const { createClient } = require('@supabase/supabase-js');
 const { getAMOEEntries, calculateEntriesToAdd, getMaxEntriesPerCustomer } = require('../utils/entryUtils');
+const emailService = require('../services/emailService');
+const crypto = require('crypto');
 
 // Create admin client with service role key that bypasses RLS
 const supabaseAdmin = createClient(
@@ -13,7 +15,6 @@ const supabaseAdmin = createClient(
     }
   }
 );
-const crypto = require('crypto');
 
 // @route   GET /api/admin/dashboard
 // @desc    Get admin dashboard data (all stores, entries, winners)
@@ -219,6 +220,16 @@ const createAdminManualEntry = async (req, res) => {
       });
     }
 
+    // Send welcome email (don't fail the request if email fails)
+    try {
+      const promoName = promo.title || promo.name || 'Rafl Sweepstakes';
+      await emailService.sendWelcomeEmail(entry.customer_email, promoName, entry.id);
+      console.log('Welcome email sent successfully for admin entry:', entry.id);
+    } catch (emailError) {
+      console.error('Failed to send welcome email for admin entry:', emailError);
+      // Don't fail the request for email errors
+    }
+
     res.status(201).json({
       success: true,
       message: 'Manual entry created successfully',
@@ -400,9 +411,117 @@ const exportWinnersCSV = async (req, res) => {
   }
 };
 
+// @route   POST /api/admin/promos
+// @desc    Admin can create promos for any store
+// @access  Private (Admin only)
+const createAdminPromo = async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Admin role required.'
+      });
+    }
+
+    const {
+      store_id,
+      title,
+      prize_description,
+      prize_amount,
+      status = 'active',
+      start_date,
+      end_date,
+      max_entries_per_email = 1,
+      max_entries_per_ip = 5,
+      enable_purchase_entries = true,
+      entries_per_dollar = 1,
+      rules_text,
+      amoe_instructions,
+      eligibility_text
+    } = req.body;
+
+    // Validate required fields
+    if (!store_id || !title || !prize_description || !prize_amount) {
+      return res.status(400).json({
+        success: false,
+        message: 'store_id, title, prize_description, and prize_amount are required'
+      });
+    }
+
+    // Verify store exists
+    const { data: store, error: storeError } = await supabaseAdmin
+      .from('stores')
+      .select('*')
+      .eq('id', store_id)
+      .single();
+
+    if (storeError || !store) {
+      return res.status(404).json({
+        success: false,
+        message: 'Store not found'
+      });
+    }
+
+    // Create promo
+    const { data: promo, error: promoError } = await supabaseAdmin
+      .from('promos')
+      .insert({
+        store_id,
+        title,
+        prize_description,
+        prize_amount: parseFloat(prize_amount),
+        status,
+        start_date: start_date || null,
+        end_date: end_date || null,
+        max_entries_per_email: parseInt(max_entries_per_email),
+        max_entries_per_ip: parseInt(max_entries_per_ip),
+        enable_purchase_entries,
+        entries_per_dollar: parseInt(entries_per_dollar),
+        rules_text: rules_text || null,
+        amoe_instructions: amoe_instructions || null,
+        eligibility_text: eligibility_text || null
+      })
+      .select()
+      .single();
+
+    if (promoError) {
+      console.error('Error creating promo:', promoError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error creating promo',
+        error: promoError.message
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Promo created successfully',
+      data: {
+        id: promo.id,
+        title: promo.title,
+        store_id: promo.store_id,
+        store_name: store.store_name,
+        prize_amount: promo.prize_amount,
+        status: promo.status,
+        created_at: promo.created_at
+      }
+    });
+
+  } catch (error) {
+    console.error('Create admin promo error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error creating promo',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getAdminDashboard,
   createAdminManualEntry,
+  createAdminPromo,
   exportEntriesCSV,
   exportWinnersCSV
 };

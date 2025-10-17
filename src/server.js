@@ -33,6 +33,7 @@ const webhookRoutes = require('./routes/webhookRoutes');
 const entryRoutes = require('./routes/entryRoutes');
 const winnerRoutes = require('./routes/winnerRoutes');
 const adminRoutes = require('./routes/adminRoutes');
+const emailRoutes = require('./routes/emailRoutes');
 
 // Routes
 app.get('/', (req, res) => {
@@ -57,6 +58,7 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/entries', entryRoutes);
 app.use('/api/winners', winnerRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/email', emailRoutes);
 
 // Start server
 app.listen(PORT, () => {

@@ -1,6 +1,7 @@
 const { supabase } = require('../config/supabase');
 const { createClient } = require('@supabase/supabase-js');
 const crypto = require('crypto');
+const emailService = require('../services/emailService');
 
 // Create admin client with service role key that bypasses RLS
 const supabaseAdmin = createClient(
@@ -39,18 +40,18 @@ const selectWinner = async (req, res) => {
 
     // Check if user is admin or has access to this promo
     const userRole = req.user?.role;
+    const clientToUse = userRole === 'admin' ? supabaseAdmin : supabase;
     let promo, promoError;
 
     if (userRole === 'admin') {
       // Admin can access any promo
-      const { data, error } = await supabase
+      console.log('Admin user - querying promo with ID:', promoId);
+      const { data, error } = await supabaseAdmin
         .from('promos')
-        .select(`
-          *,
-          stores!inner(*)
-        `)
+        .select('*')
         .eq('id', promoId)
         .single();
+      console.log('Admin promo query result:', { data, error });
       promo = data;
       promoError = error;
     } else {
@@ -106,7 +107,6 @@ const selectWinner = async (req, res) => {
     }
 
     // Get all entries for this promo (use admin client for admin users)
-    const clientToUse = userRole === 'admin' ? supabaseAdmin : supabase;
     const { data: entries, error: entriesError } = await clientToUse
       .from('entries')
       .select('*')
@@ -190,6 +190,41 @@ const selectWinner = async (req, res) => {
       // Don't fail the request for this
     }
 
+    // Send winner notification email (don't fail the request if email fails)
+    try {
+      await emailService.sendWinnerEmail(
+        winner.customer_email, 
+        promo.title, 
+        winner.prize_description, 
+        winner.entry_id
+      );
+      console.log('Winner email sent successfully for winner:', winner.id);
+    } catch (emailError) {
+      console.error('Failed to send winner email:', emailError);
+      // Don't fail the request for email errors
+    }
+
+    // Send admin notification about winner selection
+    try {
+      await emailService.sendAdminNotification(
+        'Winner Selected',
+        `A winner has been selected for promo: ${promo.title}`,
+        {
+          winnerEmail: winner.customer_email,
+          winnerName: winner.customer_name,
+          prizeDescription: winner.prize_description,
+          prizeAmount: winner.prize_amount,
+          promoTitle: promo.title,
+          totalEntries: entries.length,
+          drawnAt: winner.drawn_at
+        }
+      );
+      console.log('Admin notification sent for winner selection');
+    } catch (adminEmailError) {
+      console.error('Failed to send admin notification:', adminEmailError);
+      // Don't fail the request for email errors
+    }
+
     res.status(201).json({
       success: true,
       message: 'Winner selected successfully',
@@ -245,10 +280,7 @@ const getWinnersForPromo = async (req, res) => {
       // Admin can access any promo
       const { data, error } = await supabase
         .from('promos')
-        .select(`
-          *,
-          stores!inner(*)
-        `)
+        .select('*')
         .eq('id', promoId)
         .single();
       promo = data;

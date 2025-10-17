@@ -1,5 +1,6 @@
 const { supabase } = require('../config/supabase');
 const crypto = require('crypto');
+const emailService = require('../services/emailService');
 
 /**
  * Create manual entry (No Purchase Necessary)
@@ -189,6 +190,16 @@ const createManualEntry = async (req, res) => {
       // Don't fail the request for waitlist errors
     }
 
+    // Send welcome email (don't fail the request if email fails)
+    try {
+      const promoName = promo.title || promo.name || 'Rafl Sweepstakes';
+      await emailService.sendWelcomeEmail(email.toLowerCase().trim(), promoName, entry.id);
+      console.log('Welcome email sent successfully for entry:', entry.id);
+    } catch (emailError) {
+      console.error('Failed to send welcome email:', emailError);
+      // Don't fail the request for email errors
+    }
+
     res.status(201).json({
       success: true,
       message: 'Entry created successfully',
@@ -368,8 +379,86 @@ const getActivePromos = async (req, res) => {
   }
 };
 
+/**
+ * Create waitlist entry and send welcome email
+ * POST /api/entries/waitlist
+ */
+const createWaitlistEntry = async (req, res) => {
+  try {
+    const { email, source = 'website', utm_source = 'organic', utm_campaign = 'october_2025_beta' } = req.body;
+
+    // Validate required fields
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid email format'
+      });
+    }
+
+    // Add to waitlist (this will handle duplicates gracefully)
+    const { error: waitlistError } = await supabase
+      .from('waitlist')
+      .insert([
+        {
+          email: email.toLowerCase().trim(),
+          source: source,
+          utm_source: utm_source,
+          utm_campaign: utm_campaign
+        }
+      ]);
+
+    if (waitlistError && waitlistError.code !== '23505') {
+      // 23505 is unique constraint violation (already in waitlist)
+      console.error('Error adding to waitlist:', waitlistError);
+      return res.status(500).json({
+        success: false,
+        message: 'Error adding to waitlist',
+        error: waitlistError.message
+      });
+    }
+
+    // Send waitlist welcome email (don't fail the request if email fails)
+    try {
+      await emailService.sendWaitlistWelcomeEmail(email.toLowerCase().trim());
+      console.log('Waitlist welcome email sent successfully for:', email);
+    } catch (emailError) {
+      console.error('Failed to send waitlist welcome email:', emailError);
+      // Don't fail the request for email errors
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'Successfully added to waitlist',
+      data: {
+        email: email.toLowerCase().trim(),
+        source: source,
+        utm_source: utm_source,
+        utm_campaign: utm_campaign
+      }
+    });
+
+  } catch (error) {
+    console.error('Waitlist entry error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   createManualEntry,
+  createWaitlistEntry,
   getEntriesForPromo,
   getActivePromos
 };

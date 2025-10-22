@@ -578,10 +578,220 @@ const deletePromo = async (req, res) => {
   }
 };
 
+// @route   GET /api/dashboard/export/:type
+// @desc    Export data as CSV (entries, participants, purchases)
+// @access  Private
+const exportData = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { type } = req.params; // 'entries', 'participants', 'purchases'
+
+    // Get user's store
+    const { data: store, error: storeError } = await supabase
+      .from('stores')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+
+    if (storeError || !store) {
+      return res.status(404).json({
+        success: false,
+        message: 'Store not found'
+      });
+    }
+
+    let data = [];
+    let filename = '';
+
+    switch (type) {
+      case 'entries': {
+        // Get all promos for this store
+        const { data: promos } = await supabase
+          .from('promos')
+          .select('id, title')
+          .eq('store_id', store.id);
+
+        const promoIds = promos?.map(p => p.id) || [];
+
+        if (promoIds.length === 0) {
+          return res.json({
+            success: true,
+            data: [],
+            message: 'No promos found'
+          });
+        }
+
+        // Get entries with promo info
+        const { data: entries, error } = await supabase
+          .from('entries')
+          .select(`
+            id,
+            promo_id,
+            customer_email,
+            customer_name,
+            entry_count,
+            source,
+            order_id,
+            order_total,
+            consent_brand,
+            consent_rafl,
+            is_manual,
+            created_at,
+            promos!inner(title)
+          `)
+          .in('promo_id', promoIds)
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        // Flatten for CSV
+        data = entries?.map(entry => ({
+          id: entry.id,
+          promo_title: entry.promos?.title || 'N/A',
+          customer_email: entry.customer_email || 'N/A',
+          customer_name: entry.customer_name || 'N/A',
+          entry_count: entry.entry_count || 1,
+          source: entry.source,
+          order_id: entry.order_id || 'N/A',
+          order_total: entry.order_total || 0,
+          consent_brand: entry.consent_brand ? 'Yes' : 'No',
+          consent_rafl: entry.consent_rafl ? 'Yes' : 'No',
+          is_manual: entry.is_manual ? 'Yes' : 'No',
+          created_at: new Date(entry.created_at).toISOString()
+        })) || [];
+
+        filename = 'entries';
+        break;
+      }
+
+      case 'participants': {
+        // Get all giveaways for this store
+        const { data: giveaways } = await supabase
+          .from('giveaways')
+          .select('id, title')
+          .eq('store_id', store.id);
+
+        const giveawayIds = giveaways?.map(g => g.id) || [];
+
+        if (giveawayIds.length === 0) {
+          return res.json({
+            success: true,
+            data: [],
+            message: 'No giveaways found'
+          });
+        }
+
+        const { data: participants, error } = await supabase
+          .from('participants')
+          .select(`
+            id,
+            giveaway_id,
+            email,
+            entry_count,
+            entry_type,
+            source,
+            purchase_id,
+            created_at,
+            giveaways!inner(title)
+          `)
+          .in('giveaway_id', giveawayIds)
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        data = participants?.map(participant => ({
+          id: participant.id,
+          giveaway_title: participant.giveaways?.title || 'N/A',
+          email: participant.email,
+          entry_count: participant.entry_count,
+          entry_type: participant.entry_type,
+          source: participant.source || 'N/A',
+          has_purchase: participant.purchase_id ? 'Yes' : 'No',
+          created_at: new Date(participant.created_at).toISOString()
+        })) || [];
+
+        filename = 'participants';
+        break;
+      }
+
+      case 'purchases': {
+        // Get all Shopify shops for this store
+        const { data: shops } = await supabase
+          .from('shopify_shops')
+          .select('id, shop_domain')
+          .eq('store_id', store.id);
+
+        const shopIds = shops?.map(s => s.id) || [];
+
+        if (shopIds.length === 0) {
+          return res.json({
+            success: true,
+            data: [],
+            message: 'No Shopify shops connected'
+          });
+        }
+
+        const { data: purchases, error } = await supabase
+          .from('purchases')
+          .select(`
+            id,
+            shopify_order_id,
+            customer_email,
+            total_amount_usd,
+            currency,
+            order_date,
+            created_at,
+            shopify_shops!inner(shop_domain)
+          `)
+          .in('shopify_shop_id', shopIds)
+          .order('order_date', { ascending: false });
+
+        if (error) throw error;
+
+        data = purchases?.map(purchase => ({
+          id: purchase.id,
+          shop_domain: purchase.shopify_shops?.shop_domain || 'N/A',
+          shopify_order_id: purchase.shopify_order_id,
+          customer_email: purchase.customer_email,
+          total_amount: purchase.total_amount_usd,
+          currency: purchase.currency,
+          order_date: new Date(purchase.order_date).toISOString(),
+          imported_at: new Date(purchase.created_at).toISOString()
+        })) || [];
+
+        filename = 'purchases';
+        break;
+      }
+
+      default:
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid export type'
+        });
+    }
+
+    res.json({
+      success: true,
+      data,
+      filename,
+      count: data.length
+    });
+
+  } catch (error) {
+    console.error('Export error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Export failed',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getDashboardData,
   createPromo,
   getPromo,
   updatePromo,
-  deletePromo
+  deletePromo,
+  exportData
 };

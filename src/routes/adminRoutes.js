@@ -6,7 +6,8 @@ const {
   createAdminManualEntry,
   createAdminPromo,
   exportEntriesCSV,
-  exportWinnersCSV
+  exportWinnersCSV,
+  exportAdminData
 } = require('../controllers/adminController');
 
 // All admin routes require authentication
@@ -21,8 +22,10 @@ router.post('/entries/manual', createAdminManualEntry);
 // Promo management
 router.post('/promos', createAdminPromo);
 
-// CSV exports
+// CSV exports (legacy - for specific promos)
 router.get('/export/entries/:promoId', exportEntriesCSV);
-router.get('/export/winners', exportWinnersCSV);
+router.get('/export/winners-csv', exportWinnersCSV);
+
+router.get('/export/:type', exportAdminData);
 
 module.exports = router;

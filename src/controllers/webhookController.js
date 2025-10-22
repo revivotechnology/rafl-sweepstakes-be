@@ -196,15 +196,17 @@ const handleOrderCreate = async (req, res) => {
           }
           
           // Calculate how many entries to add (considering max limit)
+          // Use promo's max_entries_per_email if set, otherwise fall back to env variable
+          const maxEntriesLimit = promo.max_entries_per_email || getMaxEntriesPerCustomer();
           const entriesToAdd = calculateEntriesToAdd(
             orderData.totalPrice, 
             existingEntries || [], 
             promo.entries_per_dollar, 
-            getMaxEntriesPerCustomer()
+            maxEntriesLimit
           );
           
           if (entriesToAdd === 0) {
-            console.log(`⏭️ Customer ${orderData.customerEmail} has reached max entries (${getMaxEntriesPerCustomer()}) for promo ${promo.id}`);
+            console.log(`⏭️ Customer ${orderData.customerEmail} has reached max entries (${maxEntriesLimit}) for promo ${promo.id}`);
             continue;
           }
           
@@ -239,7 +241,7 @@ const handleOrderCreate = async (req, res) => {
             console.error('Error creating entry:', createEntryError);
           } else {
             const totalEntries = (existingEntries || []).reduce((sum, entry) => sum + entry.entry_count, 0) + entriesToAdd;
-            console.log(`✅ Added ${entriesToAdd} entries for ${orderData.customerEmail} (Total: ${totalEntries}/${getMaxEntriesPerCustomer()})`);
+            console.log(`✅ Added ${entriesToAdd} entries for ${orderData.customerEmail} (Total: ${totalEntries}/${maxEntriesLimit})`);
           }
         }
       }

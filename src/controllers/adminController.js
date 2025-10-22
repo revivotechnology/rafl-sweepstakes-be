@@ -518,10 +518,146 @@ const createAdminPromo = async (req, res) => {
   }
 };
 
+// @route   GET /api/admin/export/:type
+// @desc    Export all data (entries or winners) as JSON for CSV conversion
+// @access  Private (Admin only)
+const exportAdminData = async (req, res) => {
+  try {
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied. Admin role required.'
+      });
+    }
+
+    const { type } = req.params; // 'entries' or 'winners'
+
+    let data = [];
+    let filename = '';
+
+    switch (type) {
+      case 'entries': {
+        // Get all entries with promo and store info
+        const { data: entries, error } = await supabaseAdmin
+          .from('entries')
+          .select(`
+            id,
+            promo_id,
+            store_id,
+            customer_email,
+            customer_name,
+            entry_count,
+            source,
+            order_id,
+            order_total,
+            consent_brand,
+            consent_rafl,
+            is_manual,
+            created_at,
+            promos!inner(title, store_id),
+            stores!inner(store_name)
+          `)
+          .order('created_at', { ascending: false });
+
+        if (error) throw error;
+
+        // Flatten for CSV
+        data = entries?.map(entry => ({
+          id: entry.id,
+          store_name: entry.stores?.store_name || 'N/A',
+          promo_title: entry.promos?.title || 'N/A',
+          customer_email: entry.customer_email || 'N/A',
+          customer_name: entry.customer_name || 'N/A',
+          entry_count: entry.entry_count || 1,
+          source: entry.source,
+          order_id: entry.order_id || 'N/A',
+          order_total: entry.order_total || 0,
+          consent_brand: entry.consent_brand ? 'Yes' : 'No',
+          consent_rafl: entry.consent_rafl ? 'Yes' : 'No',
+          is_manual: entry.is_manual ? 'Yes' : 'No',
+          created_at: entry.created_at
+        })) || [];
+
+        filename = 'admin_entries';
+        break;
+      }
+
+      case 'winners': {
+        // Get all winners with promo and store info
+        const { data: winners, error } = await supabaseAdmin
+          .from('winners')
+          .select(`
+            id,
+            promo_id,
+            store_id,
+            customer_email,
+            customer_name,
+            prize_description,
+            prize_amount,
+            drawn_at,
+            notified,
+            notified_at,
+            claimed,
+            claimed_at,
+            created_at,
+            promos!inner(title),
+            stores!inner(store_name)
+          `)
+          .order('drawn_at', { ascending: false });
+
+        if (error) throw error;
+
+        // Flatten for CSV
+        data = winners?.map(winner => ({
+          id: winner.id,
+          store_name: winner.stores?.store_name || 'N/A',
+          promo_title: winner.promos?.title || 'N/A',
+          customer_email: winner.customer_email,
+          customer_name: winner.customer_name || 'N/A',
+          prize_description: winner.prize_description,
+          prize_amount: winner.prize_amount,
+          notified: winner.notified ? 'Yes' : 'No',
+          notified_at: winner.notified_at || 'N/A',
+          claimed: winner.claimed ? 'Yes' : 'No',
+          claimed_at: winner.claimed_at || 'N/A',
+          drawn_at: winner.drawn_at,
+          created_at: winner.created_at
+        })) || [];
+
+        filename = 'admin_winners';
+        break;
+      }
+
+      default:
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid export type. Use "entries" or "winners"'
+        });
+    }
+
+    res.json({
+      success: true,
+      data,
+      filename,
+      count: data.length
+    });
+
+  } catch (error) {
+    console.error('Admin export error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Export failed',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   getAdminDashboard,
   createAdminManualEntry,
   createAdminPromo,
   exportEntriesCSV,
-  exportWinnersCSV
+  exportWinnersCSV,
+  exportAdminData
 };

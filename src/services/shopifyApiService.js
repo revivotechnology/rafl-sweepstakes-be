@@ -549,6 +549,156 @@ const testConnectivity = async (shopDomain) => {
   });
 };
 
+/**
+ * Shopify Billing API Methods
+ */
+
+/**
+ * Create a recurring application charge (subscription)
+ * @param {string} shopDomain - Shop domain
+ * @param {string} accessToken - Shopify access token
+ * @param {object} chargeData - Charge details
+ * @returns {Promise<object>} Created charge with confirmation_url
+ */
+const createRecurringCharge = async (shopDomain, accessToken, chargeData) => {
+  const endpoint = '/recurring_application_charges.json';
+  
+  const charge = {
+    recurring_application_charge: {
+      name: chargeData.name || 'Premium Plan',
+      price: chargeData.price || 149.0,
+      return_url: chargeData.return_url,
+      test: chargeData.test !== false, // Default to test mode
+      trial_days: chargeData.trial_days || 0,
+      ...(chargeData.capped_amount && { capped_amount: chargeData.capped_amount }),
+      ...(chargeData.terms && { terms: chargeData.terms })
+    }
+  };
+
+  console.log(`[Shopify Billing] Creating recurring charge for ${shopDomain}`);
+  
+  try {
+    const response = await callShopifyAPI(shopDomain, accessToken, endpoint, 'POST', charge);
+    return {
+      success: true,
+      charge: response.data.recurring_application_charge
+    };
+  } catch (error) {
+    console.error('[Shopify Billing] Error creating charge:', error);
+    return {
+      success: false,
+      error: error.error || error.message
+    };
+  }
+};
+
+/**
+ * Get recurring application charge details
+ * @param {string} shopDomain - Shop domain
+ * @param {string} accessToken - Shopify access token
+ * @param {string} chargeId - Charge ID
+ * @returns {Promise<object>} Charge details
+ */
+const getRecurringCharge = async (shopDomain, accessToken, chargeId) => {
+  const endpoint = `/recurring_application_charges/${chargeId}.json`;
+  
+  console.log(`[Shopify Billing] Getting charge ${chargeId} for ${shopDomain}`);
+  
+  try {
+    const response = await callShopifyAPI(shopDomain, accessToken, endpoint, 'GET');
+    return {
+      success: true,
+      charge: response.data.recurring_application_charge
+    };
+  } catch (error) {
+    console.error('[Shopify Billing] Error getting charge:', error);
+    return {
+      success: false,
+      error: error.error || error.message
+    };
+  }
+};
+
+/**
+ * Activate a recurring charge after merchant approval
+ * @param {string} shopDomain - Shop domain
+ * @param {string} accessToken - Shopify access token
+ * @param {string} chargeId - Charge ID to activate
+ * @returns {Promise<object>} Activated charge
+ */
+const activateRecurringCharge = async (shopDomain, accessToken, chargeId) => {
+  const endpoint = `/recurring_application_charges/${chargeId}/activate.json`;
+  
+  console.log(`[Shopify Billing] Activating charge ${chargeId} for ${shopDomain}`);
+  
+  try {
+    const response = await callShopifyAPI(shopDomain, accessToken, endpoint, 'POST', {});
+    return {
+      success: true,
+      charge: response.data.recurring_application_charge
+    };
+  } catch (error) {
+    console.error('[Shopify Billing] Error activating charge:', error);
+    return {
+      success: false,
+      error: error.error || error.message
+    };
+  }
+};
+
+/**
+ * Cancel a recurring application charge
+ * @param {string} shopDomain - Shop domain
+ * @param {string} accessToken - Shopify access token
+ * @param {string} chargeId - Charge ID to cancel
+ * @returns {Promise<object>} Result
+ */
+const cancelRecurringCharge = async (shopDomain, accessToken, chargeId) => {
+  const endpoint = `/recurring_application_charges/${chargeId}.json`;
+  
+  console.log(`[Shopify Billing] Canceling charge ${chargeId} for ${shopDomain}`);
+  
+  try {
+    await callShopifyAPI(shopDomain, accessToken, endpoint, 'DELETE');
+    return {
+      success: true,
+      message: 'Charge cancelled successfully'
+    };
+  } catch (error) {
+    console.error('[Shopify Billing] Error canceling charge:', error);
+    return {
+      success: false,
+      error: error.error || error.message
+    };
+  }
+};
+
+/**
+ * Get all recurring charges for a shop
+ * @param {string} shopDomain - Shop domain
+ * @param {string} accessToken - Shopify access token
+ * @returns {Promise<object>} List of charges
+ */
+const getRecurringCharges = async (shopDomain, accessToken) => {
+  const endpoint = '/recurring_application_charges.json';
+  
+  console.log(`[Shopify Billing] Getting all charges for ${shopDomain}`);
+  
+  try {
+    const response = await callShopifyAPI(shopDomain, accessToken, endpoint, 'GET');
+    return {
+      success: true,
+      charges: response.data.recurring_application_charges || []
+    };
+  } catch (error) {
+    console.error('[Shopify Billing] Error getting charges:', error);
+    return {
+      success: false,
+      error: error.error || error.message
+    };
+  }
+};
+
 module.exports = {
   callShopifyAPI,
   getShopInfo,
@@ -561,6 +711,12 @@ module.exports = {
   verifyWebhookHmac,
   exchangeCodeForToken,
   setupWebhooks,
-  testConnectivity
+  testConnectivity,
+  // Billing API methods
+  createRecurringCharge,
+  getRecurringCharge,
+  activateRecurringCharge,
+  cancelRecurringCharge,
+  getRecurringCharges
 };
 

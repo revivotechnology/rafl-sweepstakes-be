@@ -12,5 +12,8 @@ router.get('/promos/:id', authenticateToken, dashboardController.getPromo);
 router.put('/promos/:id', authenticateToken, dashboardController.updatePromo);
 router.delete('/promos/:id', authenticateToken, dashboardController.deletePromo);
 
+// Export routes
+router.get('/export/:type', authenticateToken, dashboardController.exportData);
+
 module.exports = router;
 

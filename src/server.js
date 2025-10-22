@@ -34,6 +34,7 @@ const entryRoutes = require('./routes/entryRoutes');
 const winnerRoutes = require('./routes/winnerRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const emailRoutes = require('./routes/emailRoutes');
+const billingRoutes = require('./routes/billingRoutes');
 
 // Routes
 app.get('/', (req, res) => {
@@ -59,6 +60,7 @@ app.use('/api/entries', entryRoutes);
 app.use('/api/winners', winnerRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/email', emailRoutes);
+app.use('/api/billing', billingRoutes);
 
 // Start server
 app.listen(PORT, () => {

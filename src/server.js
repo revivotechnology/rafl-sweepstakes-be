@@ -12,6 +12,14 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:8080',
   credentials: true
 }));
+
+// Capture raw body for webhook HMAC verification (must be before express.json())
+app.use('/api/webhooks', express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf.toString('utf8');
+  }
+}));
+
 app.use(express.json());
 
 // Session middleware for OAuth state management

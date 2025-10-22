@@ -67,7 +67,12 @@ const callShopifyAPI = (shopDomain, accessToken, endpoint, method = 'GET', data 
 
           // Check for errors
           if (res.statusCode >= 400) {
-            console.error(`[Shopify API] Error ${res.statusCode}:`, parsedData);
+            // Don't log 422 errors as errors - they're often expected (e.g., duplicate webhooks)
+            if (res.statusCode === 422) {
+              console.log(`[Shopify API] Status ${res.statusCode}:`, parsedData.errors || parsedData);
+            } else {
+              console.error(`[Shopify API] Error ${res.statusCode}:`, parsedData);
+            }
             reject({
               statusCode: res.statusCode,
               error: parsedData.errors || parsedData.error || 'API request failed',
@@ -280,10 +285,14 @@ const registerWebhook = async (shopDomain, accessToken, topic, address, format =
       webhook: response.data.webhook
     };
   } catch (error) {
-    console.error('[Shopify API] registerWebhook error:', error);
+    // Don't log 422 errors (duplicates) as errors
+    if (error.statusCode !== 422) {
+      console.error('[Shopify API] registerWebhook error:', error);
+    }
     return {
       success: false,
-      error: error.error || 'Failed to register webhook'
+      error: error.error || 'Failed to register webhook',
+      statusCode: error.statusCode
     };
   }
 };
@@ -468,19 +477,47 @@ const setupWebhooks = async (shopDomain, accessToken) => {
 
   console.log(`[Shopify Webhooks] Setting up webhooks for ${shopDomain}`);
 
+  // First, get existing webhooks to avoid duplicates
+  const existingWebhooksResult = await getWebhooks(shopDomain, accessToken);
+  const existingWebhooks = existingWebhooksResult.success ? existingWebhooksResult.webhooks : [];
+  
+  let registeredCount = 0;
+  let skippedCount = 0;
+
   for (const webhook of webhooks) {
     try {
+      // Check if webhook already exists with this topic and address
+      const exists = existingWebhooks.some(
+        existing => existing.topic === webhook.topic && existing.address === webhook.address
+      );
+
+      if (exists) {
+        console.log(`[Shopify Webhooks] ✓ ${webhook.topic} already registered`);
+        skippedCount++;
+        continue;
+      }
+
+      // Register new webhook
       const result = await registerWebhook(shopDomain, accessToken, webhook.topic, webhook.address, webhook.format);
       if (result.success) {
-        console.log(`[Shopify Webhooks] Registered ${webhook.topic} webhook`);
+        console.log(`[Shopify Webhooks] ✓ Registered ${webhook.topic}`);
+        registeredCount++;
       } else {
-        console.error(`[Shopify Webhooks] Failed to register ${webhook.topic}:`, result.error);
+        // Check if error is due to duplicate (422 error)
+        if (result.error && typeof result.error === 'object' && result.error.address) {
+          console.log(`[Shopify Webhooks] ✓ ${webhook.topic} already exists (skipped)`);
+          skippedCount++;
+        } else {
+          console.warn(`[Shopify Webhooks] ⚠ Could not register ${webhook.topic}:`, result.error);
+        }
       }
     } catch (error) {
-      console.error(`[Shopify Webhooks] Failed to register ${webhook.topic}:`, error.message);
+      console.warn(`[Shopify Webhooks] ⚠ Error with ${webhook.topic}:`, error.message);
       // Don't throw - continue with other webhooks
     }
   }
+
+  console.log(`[Shopify Webhooks] Setup complete: ${registeredCount} new, ${skippedCount} already registered`);
 };
 
 const verifyWebhookHmac = (body, hmacHeader, secret) => {

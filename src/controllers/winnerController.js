@@ -84,30 +84,27 @@ const selectWinner = async (req, res) => {
       });
     }
 
-    // Check if there's already a winner for this promo (use admin client for admin users)
-    const { data: existingWinner, error: winnerError } = await clientToUse
+    // Get existing winners for this promo (to exclude them from selection)
+    const { data: existingWinners, error: winnersError } = await clientToUse
       .from('winners')
-      .select('id')
-      .eq('promo_id', promoId)
-      .single();
+      .select('customer_email')
+      .eq('promo_id', promoId);
 
-    if (winnerError && winnerError.code !== 'PGRST116') { // PGRST116 = no rows returned
-      console.error('Error checking existing winner:', winnerError);
+    if (winnersError && winnersError.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error('Error checking existing winners:', winnersError);
       return res.status(500).json({
         success: false,
-        message: 'Error checking existing winner'
+        message: 'Error checking existing winners'
       });
     }
 
-    if (existingWinner) {
-      return res.status(400).json({
-        success: false,
-        message: 'Winner has already been selected for this promo'
-      });
-    }
+    // Create a set of already-selected email addresses
+    const alreadySelectedEmails = new Set(
+      (existingWinners || []).map(w => w.customer_email.toLowerCase())
+    );
 
     // Get all entries for this promo (use admin client for admin users)
-    const { data: entries, error: entriesError } = await clientToUse
+    const { data: allEntries, error: entriesError } = await clientToUse
       .from('entries')
       .select('*')
       .eq('promo_id', promoId);
@@ -120,10 +117,24 @@ const selectWinner = async (req, res) => {
       });
     }
 
+    // Filter out entries from users who have already won
+    const entries = (allEntries || []).filter(
+      entry => !alreadySelectedEmails.has(entry.customer_email.toLowerCase())
+    );
+
     if (!entries || entries.length === 0) {
+      const message = alreadySelectedEmails.size > 0 
+        ? `All eligible entries have already won! ${alreadySelectedEmails.size} winner(s) already selected from ${allEntries?.length || 0} total entries.`
+        : 'No entries found for this promo';
+      
       return res.status(400).json({
         success: false,
-        message: 'No entries found for this promo'
+        message: message,
+        data: {
+          total_entries: allEntries?.length || 0,
+          already_selected: alreadySelectedEmails.size,
+          remaining: 0
+        }
       });
     }
 
@@ -176,21 +187,8 @@ const selectWinner = async (req, res) => {
       });
     }
 
-    // Update promo status to 'ended' (use admin client for admin users)
-    const { error: updatePromoError } = await clientToUse
-      .from('promos')
-      .update({ 
-        status: 'ended',
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', promoId);
-
-    if (updatePromoError) {
-      console.error('Error updating promo status:', updatePromoError);
-      // Don't fail the request for this
-    }
-
     // Send winner notification email (don't fail the request if email fails)
+    let emailSent = false;
     try {
       await emailService.sendWinnerEmail(
         winner.customer_email, 
@@ -199,6 +197,14 @@ const selectWinner = async (req, res) => {
         winner.entry_id
       );
       console.log('Winner email sent successfully for winner:', winner.id);
+      emailSent = true;
+      
+      // Update winner record to mark as notified
+      await clientToUse
+        .from('winners')
+        .update({ notified: true, notified_at: new Date().toISOString() })
+        .eq('id', winner.id);
+      
     } catch (emailError) {
       console.error('Failed to send winner email:', emailError);
       // Don't fail the request for email errors
@@ -227,7 +233,7 @@ const selectWinner = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: 'Winner selected successfully',
+      message: `Winner selected successfully! ${alreadySelectedEmails.size + 1} of ${allEntries?.length || 0} unique participants have now won.${emailSent ? ' Notification email sent.' : ' (Email notification failed)'}`,
       data: {
         winner: {
           id: winner.id,
@@ -235,13 +241,19 @@ const selectWinner = async (req, res) => {
           customerName: winner.customer_name,
           prizeDescription: winner.prize_description,
           prizeAmount: winner.prize_amount,
-          drawnAt: winner.drawn_at
+          drawnAt: winner.drawn_at,
+          notified: emailSent,
+          claimed: false
         },
         stats: {
           totalEntries: entries.length,
           totalWeightedEntries: weightedEntries.length,
           winningEntryCount: winningEntry.entry_count,
-          randomIndex: randomIndex
+          randomIndex: randomIndex,
+          previousWinners: alreadySelectedEmails.size,
+          totalWinners: alreadySelectedEmails.size + 1,
+          remainingEligible: entries.length - 1,
+          totalParticipants: allEntries?.length || 0
         }
       }
     });

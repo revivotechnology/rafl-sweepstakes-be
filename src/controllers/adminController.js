@@ -59,10 +59,16 @@ const getAdminDashboard = async (req, res) => {
       console.error('Error fetching entries:', entriesError);
     }
 
-    // Get all winners using admin client (bypasses RLS)
+    // Get all winners using admin client (bypasses RLS) with store information
     const { data: winners, error: winnersError } = await supabaseAdmin
       .from('winners')
-      .select('*')
+      .select(`
+        *,
+        stores!inner(
+          store_name,
+          store_url
+        )
+      `)
       .order('drawn_at', { ascending: false });
 
     if (winnersError) {
@@ -460,6 +466,22 @@ const createAdminPromo = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Store not found'
+      });
+    }
+
+    // Check plan limits for free tier stores
+    const prizeAmountValue = parseFloat(prize_amount);
+    if (store.subscription_tier === 'free' && prizeAmountValue > 1000) {
+      return res.status(400).json({
+        success: false,
+        message: `Plan limit exceeded. This store is on the FREE tier (max $1,000 prize). Prize amount: $${prizeAmountValue.toLocaleString()}. The store owner needs to upgrade to Premium for unlimited prize amounts.`,
+        error: 'PLAN_LIMIT_EXCEEDED',
+        data: {
+          current_tier: 'free',
+          max_prize_amount: 1000,
+          requested_prize_amount: prizeAmountValue,
+          store_name: store.store_name
+        }
       });
     }
 

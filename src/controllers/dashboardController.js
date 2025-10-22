@@ -506,47 +506,65 @@ const updatePromo = async (req, res) => {
 
 // @route   DELETE /api/dashboard/promos/:id
 // @desc    Delete a promo
-// @access  Private
+// @access  Private (Store owners can delete their own promos, admins can delete any promo)
 const deletePromo = async (req, res) => {
   try {
     const userId = req.user.id;
+    const userRole = req.user.role;
     const promoId = req.params.id;
 
-    // Check if store is already attached from OAuth (Shopify login)
-    let store = req.user.store || null;
-    
-    // If no store attached, query by user_id (regular auth)
-    if (!store) {
-      // Verify promo belongs to user's store
-      const { data: promo, error: verifyError } = await supabase
-        .from('promos')
-        .select(`
-          *,
-          stores!inner(user_id)
-        `)
-        .eq('id', promoId)
-        .eq('stores.user_id', userId)
-        .single();
+    // Admins can delete any promo without permission check
+    if (userRole !== 'admin') {
+      // Check if store is already attached from OAuth (Shopify login)
+      let store = req.user.store || null;
+      
+      // If no store attached, query by user_id (regular auth)
+      if (!store) {
+        // Verify promo belongs to user's store
+        const { data: promo, error: verifyError } = await supabase
+          .from('promos')
+          .select(`
+            *,
+            stores!inner(user_id)
+          `)
+          .eq('id', promoId)
+          .eq('stores.user_id', userId)
+          .single();
 
-      if (verifyError || !promo) {
-        return res.status(404).json({
-          success: false,
-          message: 'Promo not found or you do not have permission to delete it'
-        });
+        if (verifyError || !promo) {
+          return res.status(404).json({
+            success: false,
+            message: 'Promo not found or you do not have permission to delete it'
+          });
+        }
+      } else {
+        // For OAuth users, verify promo belongs to their store
+        const { data: promo, error: verifyError } = await supabase
+          .from('promos')
+          .select('*')
+          .eq('id', promoId)
+          .eq('store_id', store.id)
+          .single();
+
+        if (verifyError || !promo) {
+          return res.status(404).json({
+            success: false,
+            message: 'Promo not found or you do not have permission to delete it'
+          });
+        }
       }
     } else {
-      // For OAuth users, verify promo belongs to their store
+      // For admins, just verify the promo exists
       const { data: promo, error: verifyError } = await supabase
         .from('promos')
         .select('*')
         .eq('id', promoId)
-        .eq('store_id', store.id)
         .single();
 
       if (verifyError || !promo) {
         return res.status(404).json({
           success: false,
-          message: 'Promo not found or you do not have permission to delete it'
+          message: 'Promo not found'
         });
       }
     }

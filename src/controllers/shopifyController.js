@@ -94,20 +94,12 @@ const handleShopifyCallback = async (req, res) => {
     }
     
     console.log(`🔄 Processing OAuth for shop: ${shop}`);
-    console.log(`📋 OAuth parameters:`, { shop, code: code ? 'present' : 'missing', hmac: hmac ? 'present' : 'missing', state, timestamp });
     
-    // Test network connectivity first
-    const connectivityTest = await shopifyApi.testConnectivity(shop);
-    if (!connectivityTest.success) {
-      console.log(`⚠️ Network connectivity test failed: ${connectivityTest.message}`);
-      console.log(`⚠️ Falling back to DEV MODE due to network issues`);
-    }
-
     // Try real OAuth flow first, fallback to dev mode if network issues
     let tokenData, shopData;
     
     try {
-      console.log(`🔄 Attempting real Shopify OAuth for ${shop}`);
+      console.log(`🔄 Exchanging authorization code for access token...`);
       
       // Exchange code for access token
       tokenData = await shopifyApi.exchangeCodeForToken(shop, code);
@@ -260,17 +252,18 @@ const handleShopifyCallback = async (req, res) => {
       store = updatedStore;
     }
     
-    // Setup webhooks (try for both real and dev tokens)
-    try {
-      console.log('🔧 Setting up webhooks for automatic order sync...');
-      await shopifyApi.setupWebhooks(shop, tokenData.access_token);
-      console.log('✅ Webhooks setup completed - orders will now sync automatically!');
-    } catch (error) {
-      console.log('⚠️ Webhook setup failed:', error.message);
-      console.log('📝 Manual webhook setup may be required in Shopify admin');
-    }
-    
     console.log(`✅ Shopify app installed successfully for ${shop}`);
+    
+    // Setup webhooks in background (non-blocking for faster OAuth completion)
+    setImmediate(async () => {
+      try {
+        console.log('🔧 Setting up webhooks for automatic order sync...');
+        await shopifyApi.setupWebhooks(shop, tokenData.access_token);
+        console.log('✅ Webhooks setup completed - orders will now sync automatically!');
+      } catch (error) {
+        console.log('⚠️ Webhook setup failed:', error.message);
+      }
+    });
     
     // Ensure store is properly defined
     if (!store || !store.id) {

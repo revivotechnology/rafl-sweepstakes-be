@@ -17,13 +17,13 @@ const handleOrderCreate = async (req, res) => {
     const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
     
     if (webhookSecret && hmacHeader) {
-      // Get raw body for HMAC verification
-      const rawBody = JSON.stringify(req.body);
+      // Use raw body captured by middleware for accurate HMAC verification
+      const rawBody = req.rawBody || JSON.stringify(req.body);
       const isValid = shopifyApi.verifyWebhookHmac(rawBody, hmacHeader, webhookSecret);
       if (!isValid) {
         console.log('❌ Invalid webhook signature');
-        console.log('Expected HMAC:', hmacHeader);
-        console.log('Webhook secret configured:', !!webhookSecret);
+        console.log('Received HMAC:', hmacHeader);
+        console.log('Raw body available:', !!req.rawBody);
         
         // In production, reject invalid signatures
         if (process.env.NODE_ENV === 'production') {
@@ -39,7 +39,7 @@ const handleOrderCreate = async (req, res) => {
         console.log('✅ Webhook signature verified');
       }
     } else {
-      console.log('⚠️ Skipping HMAC verification (development mode)');
+      console.log('⚠️ Skipping HMAC verification (no secret or HMAC header)');
       
       // In production, require webhook secret
       if (process.env.NODE_ENV === 'production') {
@@ -150,24 +150,35 @@ const handleOrderCreate = async (req, res) => {
     }
 
     // Save order data to purchases table
-    const { data: purchase, error: purchaseError } = await supabase
-      .from('purchases')
-      .upsert({
-        shopify_shop_id: shopifyShop.id,
-        shopify_order_id: orderData.shopifyOrderId,
-        customer_email: orderData.customerEmail,
-        total_amount_usd: orderData.totalPrice,
-        currency: orderData.currency,
-        order_date: orderData.orderDate.toISOString()
-      }, {
-        onConflict: 'shopify_shop_id,shopify_order_id'
-      })
-      .select();
-
-    if (purchaseError) {
-      console.error('Error saving purchase:', purchaseError);
+    console.log(`💾 Saving purchase record for shopify_shop_id: ${shopifyShop?.id}, order: ${orderData.shopifyOrderId}`);
+    
+    if (!shopifyShop || !shopifyShop.id) {
+      console.error('❌ Cannot save purchase: shopify_shop record is missing');
     } else {
-      console.log('✅ Purchase record saved/updated:', purchase);
+      const { data: purchase, error: purchaseError } = await supabase
+        .from('purchases')
+        .upsert({
+          shopify_shop_id: shopifyShop.id,
+          shopify_order_id: orderData.shopifyOrderId,
+          customer_email: orderData.customerEmail,
+          total_amount_usd: orderData.totalPrice,
+          currency: orderData.currency,
+          order_date: orderData.orderDate.toISOString()
+        }, {
+          onConflict: 'shopify_shop_id,shopify_order_id'
+        })
+        .select();
+
+      if (purchaseError) {
+        console.error('❌ Error saving purchase:', purchaseError);
+        console.error('Purchase data attempted:', {
+          shopify_shop_id: shopifyShop.id,
+          shopify_order_id: orderData.shopifyOrderId,
+          customer_email: orderData.customerEmail
+        });
+      } else {
+        console.log('✅ Purchase record saved/updated:', purchase);
+      }
     }
     
     // Check if customer email exists and matches any active promos
@@ -278,8 +289,8 @@ const handleOrderUpdate = async (req, res) => {
     const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
     
     if (webhookSecret && hmacHeader) {
-      // Get raw body for HMAC verification
-      const rawBody = JSON.stringify(req.body);
+      // Use raw body captured by middleware for accurate HMAC verification
+      const rawBody = req.rawBody || JSON.stringify(req.body);
       const isValid = shopifyApi.verifyWebhookHmac(rawBody, hmacHeader, webhookSecret);
       if (!isValid) {
         console.log('❌ Invalid webhook signature');
@@ -298,7 +309,7 @@ const handleOrderUpdate = async (req, res) => {
         console.log('✅ Webhook signature verified');
       }
     } else {
-      console.log('⚠️ Skipping HMAC verification (development mode)');
+      console.log('⚠️ Skipping HMAC verification (no secret or HMAC header)');
       
       // In production, require webhook secret
       if (process.env.NODE_ENV === 'production') {
@@ -390,8 +401,8 @@ const handleAppUninstall = async (req, res) => {
     const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
     
     if (webhookSecret && hmacHeader) {
-      // Get raw body for HMAC verification
-      const rawBody = JSON.stringify(req.body);
+      // Use raw body captured by middleware for accurate HMAC verification
+      const rawBody = req.rawBody || JSON.stringify(req.body);
       const isValid = shopifyApi.verifyWebhookHmac(rawBody, hmacHeader, webhookSecret);
       if (!isValid) {
         console.log('❌ Invalid webhook signature');
@@ -410,7 +421,7 @@ const handleAppUninstall = async (req, res) => {
         console.log('✅ Webhook signature verified');
       }
     } else {
-      console.log('⚠️ Skipping HMAC verification (development mode)');
+      console.log('⚠️ Skipping HMAC verification (no secret or HMAC header)');
       
       // In production, require webhook secret
       if (process.env.NODE_ENV === 'production') {

@@ -418,7 +418,7 @@ const exportWinnersCSV = async (req, res) => {
 };
 
 // @route   POST /api/admin/promos
-// @desc    Admin can create promos for any store
+// @desc    Admin can create promos for stores by subscription tier or individual store
 // @access  Private (Admin only)
 const createAdminPromo = async (req, res) => {
   try {
@@ -432,6 +432,7 @@ const createAdminPromo = async (req, res) => {
 
     const {
       store_id,
+      subscription_tier,
       title,
       prize_description,
       prize_amount,
@@ -448,85 +449,141 @@ const createAdminPromo = async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!store_id || !title || !prize_description || !prize_amount) {
+    if ((!store_id && !subscription_tier) || !title || !prize_description || !prize_amount) {
       return res.status(400).json({
         success: false,
-        message: 'store_id, title, prize_description, and prize_amount are required'
+        message: 'Either store_id or subscription_tier is required, along with title, prize_description, and prize_amount'
       });
     }
 
-    // Verify store exists
-    const { data: store, error: storeError } = await supabaseAdmin
-      .from('stores')
-      .select('*')
-      .eq('id', store_id)
-      .single();
-
-    if (storeError || !store) {
-      return res.status(404).json({
-        success: false,
-        message: 'Store not found'
-      });
-    }
-
-    // Check plan limits for free tier stores
     const prizeAmountValue = parseFloat(prize_amount);
-    if (store.subscription_tier === 'free' && prizeAmountValue > 1000) {
-      return res.status(400).json({
-        success: false,
-        message: `Plan limit exceeded. This store is on the FREE tier (max $1,000 prize). Prize amount: $${prizeAmountValue.toLocaleString()}. The store owner needs to upgrade to Premium for unlimited prize amounts.`,
-        error: 'PLAN_LIMIT_EXCEEDED',
-        data: {
-          current_tier: 'free',
-          max_prize_amount: 1000,
-          requested_prize_amount: prizeAmountValue,
-          store_name: store.store_name
-        }
-      });
+
+    // Determine target stores
+    let targetStores = [];
+    
+    if (subscription_tier) {
+      // Creating promos for all stores of a specific tier
+      const { data: stores, error: storesError } = await supabaseAdmin
+        .from('stores')
+        .select('*')
+        .eq('subscription_tier', subscription_tier);
+
+      if (storesError) {
+        console.error('Error fetching stores:', storesError);
+        return res.status(500).json({
+          success: false,
+          message: 'Error fetching stores',
+          error: storesError.message
+        });
+      }
+
+      if (!stores || stores.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `No stores found with subscription tier: ${subscription_tier}`
+        });
+      }
+
+      targetStores = stores;
+
+      // Check plan limits for free tier
+      if (subscription_tier === 'free' && prizeAmountValue > 1000) {
+        return res.status(400).json({
+          success: false,
+          message: `Plan limit exceeded. Free tier stores have a maximum $1,000 prize limit. Prize amount: $${prizeAmountValue.toLocaleString()}. Please reduce the prize amount or select a different tier.`,
+          error: 'PLAN_LIMIT_EXCEEDED',
+          data: {
+            subscription_tier: 'free',
+            max_prize_amount: 1000,
+            requested_prize_amount: prizeAmountValue,
+            affected_stores_count: stores.length
+          }
+        });
+      }
+    } else {
+      // Creating promo for a single store (backward compatibility)
+      const { data: store, error: storeError } = await supabaseAdmin
+        .from('stores')
+        .select('*')
+        .eq('id', store_id)
+        .single();
+
+      if (storeError || !store) {
+        return res.status(404).json({
+          success: false,
+          message: 'Store not found'
+        });
+      }
+
+      // Check plan limits for free tier stores
+      if (store.subscription_tier === 'free' && prizeAmountValue > 1000) {
+        return res.status(400).json({
+          success: false,
+          message: `Plan limit exceeded. This store is on the FREE tier (max $1,000 prize). Prize amount: $${prizeAmountValue.toLocaleString()}. The store owner needs to upgrade to Premium for unlimited prize amounts.`,
+          error: 'PLAN_LIMIT_EXCEEDED',
+          data: {
+            current_tier: 'free',
+            max_prize_amount: 1000,
+            requested_prize_amount: prizeAmountValue,
+            store_name: store.store_name
+          }
+        });
+      }
+
+      targetStores = [store];
     }
 
-    // Create promo
-    const { data: promo, error: promoError } = await supabaseAdmin
+    // Create promos for all target stores
+    const promosToInsert = targetStores.map(store => ({
+      store_id: store.id,
+      title,
+      prize_description,
+      prize_amount: prizeAmountValue,
+      status,
+      start_date: start_date || null,
+      end_date: end_date || null,
+      max_entries_per_email: parseInt(max_entries_per_email),
+      max_entries_per_ip: parseInt(max_entries_per_ip),
+      enable_purchase_entries,
+      entries_per_dollar: parseInt(entries_per_dollar),
+      rules_text: rules_text || null,
+      amoe_instructions: amoe_instructions || null,
+      eligibility_text: eligibility_text || null
+    }));
+
+    const { data: createdPromos, error: promoError } = await supabaseAdmin
       .from('promos')
-      .insert({
-        store_id,
-        title,
-        prize_description,
-        prize_amount: parseFloat(prize_amount),
-        status,
-        start_date: start_date || null,
-        end_date: end_date || null,
-        max_entries_per_email: parseInt(max_entries_per_email),
-        max_entries_per_ip: parseInt(max_entries_per_ip),
-        enable_purchase_entries,
-        entries_per_dollar: parseInt(entries_per_dollar),
-        rules_text: rules_text || null,
-        amoe_instructions: amoe_instructions || null,
-        eligibility_text: eligibility_text || null
-      })
-      .select()
-      .single();
+      .insert(promosToInsert)
+      .select();
 
     if (promoError) {
-      console.error('Error creating promo:', promoError);
+      console.error('Error creating promos:', promoError);
       return res.status(500).json({
         success: false,
-        message: 'Error creating promo',
+        message: 'Error creating promos',
         error: promoError.message
       });
     }
 
+    // Build response with summary
+    const responseMessage = subscription_tier 
+      ? `Successfully created ${createdPromos.length} promo(s) for all ${subscription_tier.toUpperCase()} stores`
+      : 'Promo created successfully';
+
     res.status(201).json({
       success: true,
-      message: 'Promo created successfully',
+      message: responseMessage,
       data: {
-        id: promo.id,
-        title: promo.title,
-        store_id: promo.store_id,
-        store_name: store.store_name,
-        prize_amount: promo.prize_amount,
-        status: promo.status,
-        created_at: promo.created_at
+        created_count: createdPromos.length,
+        promos: createdPromos.map(promo => ({
+          id: promo.id,
+          title: promo.title,
+          store_id: promo.store_id,
+          prize_amount: promo.prize_amount,
+          status: promo.status,
+          created_at: promo.created_at
+        })),
+        subscription_tier: subscription_tier || null
       }
     });
 
@@ -534,7 +591,7 @@ const createAdminPromo = async (req, res) => {
     console.error('Create admin promo error:', error);
     res.status(500).json({
       success: false,
-      message: 'Error creating promo',
+      message: 'Error creating promos',
       error: error.message
     });
   }

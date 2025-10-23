@@ -90,10 +90,12 @@ const signup = async (req, res) => {
       });
     }
 
-    // Return response
+    // Return response with tokens
     res.status(201).json({
       success: true,
       message: 'Account created successfully. Please check your email to verify your account.',
+      token: authData.session?.access_token,
+      refreshToken: authData.session?.refresh_token,
       user: {
         id: authData.user.id,
         email: authData.user.email,
@@ -179,10 +181,12 @@ const signin = async (req, res) => {
     // Determine user role (prioritize database role over metadata)
     const userRoleFromDB = userRole?.role || authData.user.user_metadata?.role || 'merchant';
 
-    // Return response
+    // Return response with tokens
     res.status(200).json({
       success: true,
       message: 'Login successful',
+      token: authData.session?.access_token,
+      refreshToken: authData.session?.refresh_token,
       user: {
         id: authData.user.id,
         email: authData.user.email,
@@ -285,7 +289,7 @@ const getCurrentUser = async (req, res) => {
 // @access  Public
 const refreshToken = async (req, res) => {
   try {
-    const { refresh_token } = req.body;
+    const { refreshToken: refresh_token } = req.body;
 
     if (!refresh_token) {
       return res.status(400).json({
@@ -294,22 +298,41 @@ const refreshToken = async (req, res) => {
       });
     }
 
+    console.log('🔄 Refreshing token...');
+
     const { data, error } = await supabase.auth.refreshSession({
       refresh_token
     });
 
     if (error) {
+      console.error('❌ Token refresh failed:', error.message);
       return res.status(401).json({
         success: false,
-        message: 'Invalid refresh token'
+        message: 'Invalid or expired refresh token'
       });
     }
 
+    if (!data.session) {
+      return res.status(401).json({
+        success: false,
+        message: 'Failed to refresh session'
+      });
+    }
+
+    console.log('✅ Token refreshed successfully');
+
     res.status(200).json({
       success: true,
+      data: {
+        accessToken: data.session.access_token,
+        refreshToken: data.session.refresh_token,
+        expiresIn: data.session.expires_in,
+        expiresAt: data.session.expires_at
+      },
       session: data.session
     });
   } catch (error) {
+    console.error('❌ Error refreshing token:', error);
     res.status(500).json({
       success: false,
       message: 'Error refreshing token',

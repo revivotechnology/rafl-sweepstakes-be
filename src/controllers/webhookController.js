@@ -87,12 +87,30 @@ const handleOrderCreate = async (req, res) => {
       });
     }
     
+    // Extract customer email, with phone number fallback
+    let customerEmail = order.email || order.contact_email || order.customer?.email;
+    
+    // If no email but phone exists, create a phone-based identifier
+    if (!customerEmail || customerEmail === '') {
+      const phone = order.phone || order.customer?.phone;
+      if (phone) {
+        // Remove special characters and create a unique identifier
+        const cleanPhone = phone.replace(/[^\d]/g, ''); // Keep only digits
+        customerEmail = `phone_${cleanPhone}@phone.customer`;
+        console.log(`📱 No email found, using phone-based identifier: ${customerEmail}`);
+      } else {
+        // Last resort: use order ID as identifier
+        customerEmail = `order_${order.id}@noemail.customer`;
+        console.log(`⚠️ No email or phone found, using order-based identifier: ${customerEmail}`);
+      }
+    }
+    
     // Extract order details
     const orderData = {
       storeId: store.id,
       shopifyOrderId: order.id.toString(),
       shopifyOrderNumber: order.order_number,
-      customerEmail: order.email || order.customer?.email,
+      customerEmail: customerEmail,
       customerName: order.customer?.first_name && order.customer?.last_name 
         ? `${order.customer.first_name} ${order.customer.last_name}`.trim()
         : order.customer?.first_name || order.customer?.last_name || null,
@@ -353,11 +371,27 @@ const handleOrderUpdate = async (req, res) => {
       });
     }
     
+    // Extract customer email with phone fallback
+    let updateEmail = order.email || order.contact_email || order.customer?.email;
+    
+    // If no email but phone exists, create a phone-based identifier
+    if (!updateEmail || updateEmail === '') {
+      const phone = order.phone || order.customer?.phone;
+      if (phone) {
+        const cleanPhone = phone.replace(/[^\d]/g, '');
+        updateEmail = `phone_${cleanPhone}@phone.customer`;
+        console.log(`📱 No email found in update, using phone-based identifier: ${updateEmail}`);
+      } else {
+        updateEmail = `order_${order.id}@noemail.customer`;
+        console.log(`⚠️ No email or phone found in update, using order-based identifier: ${updateEmail}`);
+      }
+    }
+    
     // Update purchase record
     const { data: updatedPurchase, error: updateError } = await supabase
       .from('purchases')
       .update({
-        customer_email: order.email || order.customer?.email,
+        customer_email: updateEmail,
         total_amount_usd: parseFloat(order.total_price || 0),
         currency: order.currency || 'USD',
         order_date: new Date(order.created_at).toISOString()

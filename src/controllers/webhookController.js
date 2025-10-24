@@ -520,8 +520,156 @@ const handleAppUninstall = async (req, res) => {
   }
 };
 
+const handleSubscriptionUpdate = async (req, res) => {
+  try {
+    console.log('💳 Subscription update webhook received');
+    console.log('💳 Webhook body:', JSON.stringify(req.body, null, 2));
+    
+    // Verify webhook signature
+    const hmacHeader = req.headers['x-shopify-hmac-sha256'];
+    const webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
+    
+    if (webhookSecret && hmacHeader) {
+      const rawBody = req.rawBody || JSON.stringify(req.body);
+      const isValid = shopifyApi.verifyWebhookHmac(rawBody, hmacHeader, webhookSecret);
+      
+      if (!isValid) {
+        console.log('❌ Invalid webhook signature for subscription update');
+        if (process.env.NODE_ENV === 'production') {
+          return res.status(401).json({
+            success: false,
+            message: 'Invalid webhook signature'
+          });
+        }
+        console.log('⚠️ Continuing in development mode despite invalid signature');
+      } else {
+        console.log('✅ Subscription webhook signature verified');
+      }
+    }
+    
+    const subscription = req.body;
+    
+    // Extract subscription details
+    const {
+      id: chargeId,
+      status,
+      name: planName,
+      price,
+      billing_on,
+      activated_on,
+      cancelled_on
+    } = subscription;
+    
+    console.log(`💳 Subscription ${chargeId} status: ${status}`);
+    console.log(`💳 Plan: ${planName}, Price: $${price}`);
+    
+    // Find store by charge ID
+    const { data: stores, error: findError } = await supabase
+      .from('stores')
+      .select('*')
+      .eq('shopify_charge_id', chargeId.toString());
+    
+    if (findError || !stores || stores.length === 0) {
+      console.log(`⚠️ No store found with charge ID: ${chargeId}`);
+      // Still return 200 to acknowledge webhook
+      return res.status(200).json({
+        success: true,
+        message: 'Webhook received but no matching store found'
+      });
+    }
+    
+    const store = stores[0];
+    console.log(`💳 Updating subscription for store: ${store.id} (${store.shop_domain})`);
+    
+    // Map Shopify status to our billing status and subscription tier
+    let billingStatus = 'pending';
+    let subscriptionTier = store.subscription_tier || 'free';
+    
+    switch (status) {
+      case 'active':
+        billingStatus = 'active';
+        subscriptionTier = 'premium';
+        console.log('✅ Subscription is ACTIVE - upgrading to premium');
+        break;
+        
+      case 'cancelled':
+      case 'expired':
+      case 'declined':
+        billingStatus = 'cancelled';
+        subscriptionTier = 'free';
+        console.log('❌ Subscription is CANCELLED/EXPIRED - downgrading to free');
+        break;
+        
+      case 'frozen':
+        billingStatus = 'frozen';
+        console.log('❄️ Subscription is FROZEN');
+        break;
+        
+      case 'pending':
+        billingStatus = 'pending';
+        console.log('⏳ Subscription is PENDING');
+        break;
+        
+      default:
+        console.log(`⚠️ Unknown subscription status: ${status}`);
+        billingStatus = status;
+    }
+    
+    // Update store in database
+    const updateData = {
+      subscription_tier: subscriptionTier,
+      billing_status: billingStatus,
+      shopify_charge_id: chargeId.toString(),
+      plan_name: subscriptionTier === 'premium' ? 'premium' : 'free',
+      updated_at: new Date().toISOString()
+    };
+    
+    // Add additional fields if available
+    if (billing_on) updateData.billing_on = billing_on;
+    if (activated_on) updateData.last_charge_at = activated_on;
+    if (cancelled_on) updateData.cancelled_at = cancelled_on;
+    
+    const { error: updateError } = await supabase
+      .from('stores')
+      .update(updateData)
+      .eq('id', store.id);
+    
+    if (updateError) {
+      console.error('❌ Error updating store subscription:', updateError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to update store subscription',
+        error: updateError.message
+      });
+    }
+    
+    console.log(`✅ Store ${store.id} subscription updated successfully`);
+    console.log(`   Status: ${billingStatus}`);
+    console.log(`   Tier: ${subscriptionTier}`);
+    
+    // Return 200 to acknowledge webhook
+    return res.status(200).json({
+      success: true,
+      message: 'Subscription updated successfully',
+      store_id: store.id,
+      subscription_tier: subscriptionTier,
+      billing_status: billingStatus
+    });
+    
+  } catch (error) {
+    console.error('❌ Error handling subscription update webhook:', error);
+    // Still return 200 to prevent Shopify from retrying
+    return res.status(200).json({
+      success: false,
+      message: 'Error processing webhook',
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   handleOrderCreate,
   handleOrderUpdate,
-  handleAppUninstall
+  handleAppUninstall,
+  handleSubscriptionUpdate
 };

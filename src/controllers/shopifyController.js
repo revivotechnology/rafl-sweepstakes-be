@@ -3,6 +3,10 @@ const https = require('https');
 const { supabase } = require('../config/supabase');
 const shopifyApi = require('../services/shopifyApiService');
 
+// Simple in-memory cache for shop data (reduces Shopify API calls)
+const shopDataCache = new Map();
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
 // Helper function to make HTTP requests
 const makeRequest = (options, postData = null) => {
   return new Promise((resolve, reject) => {
@@ -105,13 +109,28 @@ const handleShopifyCallback = async (req, res) => {
       tokenData = await shopifyApi.exchangeCodeForToken(shop, code);
       console.log(`✅ Token exchange successful`);
       
-      // Get shop information
-      const shopResponse = await shopifyApi.getShopInfo(shop, tokenData.access_token);
-      if (shopResponse.success && shopResponse.shop) {
-        shopData = shopResponse.shop;
-        console.log(`✅ Shop data received: ${shopData.name} (${shopData.email})`);
+      // Get shop information (with caching to reduce API calls)
+      const cacheKey = `shop_${shop}`;
+      const cachedData = shopDataCache.get(cacheKey);
+      
+      if (cachedData && (Date.now() - cachedData.timestamp < CACHE_TTL)) {
+        // Use cached data
+        shopData = cachedData.data;
+        console.log(`✅ Shop data retrieved from cache: ${shopData.name} (${shopData.email})`);
       } else {
-        throw new Error(`Failed to get shop info: ${shopResponse.error || 'Unknown error'}`);
+        // Fetch from API and cache it
+        const shopResponse = await shopifyApi.getShopInfo(shop, tokenData.access_token);
+        if (shopResponse.success && shopResponse.shop) {
+          shopData = shopResponse.shop;
+          // Cache the result
+          shopDataCache.set(cacheKey, {
+            data: shopData,
+            timestamp: Date.now()
+          });
+          console.log(`✅ Shop data received: ${shopData.name} (${shopData.email})`);
+        } else {
+          throw new Error(`Failed to get shop info: ${shopResponse.error || 'Unknown error'}`);
+        }
       }
       
     } catch (error) {
@@ -164,92 +183,75 @@ const handleShopifyCallback = async (req, res) => {
     // Create a proper UUID for the store (using crypto to generate a UUID v4)
     const tempUserId = crypto.randomUUID();
     
-    // Find or create store
-    console.log(`🔍 Looking for existing store with domain: ${shop}`);
-    let { data: store, error: storeError } = await supabase
+    // Check if store exists first (to preserve subscription tier)
+    console.log(`🔍 Checking for existing store with domain: ${shop}`);
+    const { data: existingStore } = await supabase
       .from('stores')
-      .select('*')
+      .select('id, subscription_tier, plan_name')
       .eq('shopify_domain', shop)
       .single();
     
-    if (storeError && storeError.code !== 'PGRST116') {
-      console.error('Error finding store:', storeError);
-      console.error('Store query details:', { shop, storeError });
-      return res.status(500).json({
-        success: false,
-        message: 'Database error',
-        error: storeError.message
-      });
-    }
+    let store;
     
-    if (!store) {
-      // Create new store
-      console.log(`➕ Creating new store for domain: ${shop}`);
-      const { data: newStore, error: createStoreError } = await supabase
-        .from('stores')
-        .insert({
-          user_id: tempUserId,
-          store_name: shopData.name,
-          store_url: `https://${shop}`,
-          shopify_domain: shop,
-          shopify_access_token: tokenData.access_token,
-          shopify_store_id: shopData.id.toString(),
-          subscription_tier: 'free',
-          status: 'active',
-          installed_at: new Date().toISOString()
-        })
-        .select()
-        .single();
-      
-      if (createStoreError) {
-        console.error('Error creating store:', createStoreError);
-        console.error('Store data attempted:', {
-          user_id: tempUserId,
-          store_name: shopData.name,
-          store_url: `https://${shop}`,
-          shopify_domain: shop,
-          shopify_access_token: tokenData.access_token,
-          shopify_store_id: shopData.id.toString(),
-          subscription_tier: 'free',
-        status: 'active',
-          installed_at: new Date().toISOString()
-        });
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to create store',
-          error: createStoreError.message,
-          details: createStoreError
-        });
-      }
-      
-      store = newStore;
-    } else {
-      // Update existing store
-      console.log(`🔄 Updating existing store: ${store.id}`);
-      const { data: updatedStore, error: updateStoreError } = await supabase
+    if (existingStore) {
+      // Update existing store (preserve subscription tier and plan)
+      console.log(`🔄 Updating existing store: ${existingStore.id}`);
+      const { data: updatedStore, error: updateError } = await supabase
         .from('stores')
         .update({
           shopify_access_token: tokenData.access_token,
           shopify_store_id: shopData.id.toString(),
+          store_name: shopData.name,
           status: 'active',
           installed_at: new Date().toISOString()
         })
-        .eq('id', store.id)
+        .eq('id', existingStore.id)
         .select()
         .single();
       
-      if (updateStoreError) {
-        console.error('Error updating store:', updateStoreError);
-        console.error('Update details:', { storeId: store.id, updateStoreError });
+      if (updateError) {
+        console.error('Error updating store:', updateError);
         return res.status(500).json({
           success: false,
           message: 'Failed to update store',
-          error: updateStoreError.message,
-          details: updateStoreError
+          error: updateError.message
         });
       }
       
       store = updatedStore;
+      console.log(`✅ Store ${store.id} updated successfully (tier: ${store.subscription_tier})`);
+      
+    } else {
+      // Create new store (default to free tier)
+      console.log(`➕ Creating new store for domain: ${shop}`);
+      const { data: newStore, error: createError } = await supabase
+        .from('stores')
+        .insert({
+          shopify_domain: shop,
+          user_id: tempUserId,
+          store_name: shopData.name,
+          store_url: `https://${shop}`,
+          shopify_access_token: tokenData.access_token,
+          shopify_store_id: shopData.id.toString(),
+          subscription_tier: 'free',
+          plan_name: 'free',
+          status: 'active',
+          installed_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+      
+      if (createError) {
+        console.error('Error creating store:', createError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to create store',
+          error: createError.message
+        });
+      }
+      
+      store = newStore;
+      console.log(`✅ Store ${store.id} created successfully (tier: free)`);
     }
     
     console.log(`✅ Shopify app installed successfully for ${shop}`);

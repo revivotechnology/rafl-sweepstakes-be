@@ -2,10 +2,21 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const session = require('express-session');
+const morgan = require('morgan');
 const { testConnection } = require('./config/supabase');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// Request logging with Morgan
+if (process.env.NODE_ENV === 'production') {
+  // Production: Combined Apache-style logs
+  app.use(morgan('combined'));
+} else {
+  // Development: Colored output with response time
+  // Format: METHOD /path STATUS response-time
+  app.use(morgan('dev'));
+}
 
 // Middleware
 app.use(cors({

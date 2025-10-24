@@ -472,6 +472,11 @@ const setupWebhooks = async (shopDomain, accessToken) => {
       topic: 'app/uninstalled',
       address: `${webhookBaseUrl}/app/uninstalled`,
       format: 'json'
+    },
+    {
+      topic: 'app_subscriptions/update',
+      address: `${webhookBaseUrl}/app_subscriptions/update`,
+      format: 'json'
     }
   ];
 

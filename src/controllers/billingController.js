@@ -85,6 +85,56 @@ const createSubscription = async (req, res) => {
 
     console.log('Charge result:', JSON.stringify(chargeResult, null, 2));
 
+    // Check for 403 error (Billing API not enabled for Custom apps) or any failure
+    const billingApiUnavailable = !chargeResult.success && 
+      (chargeResult.error === 'API request failed' || chargeResult.statusCode === 403);
+
+    // DEVELOPMENT BYPASS: If billing API is unavailable and DEV mode is enabled
+    const devBypassEnabled = process.env.DEV_BILLING_BYPASS === 'true';
+    
+    if (billingApiUnavailable && devBypassEnabled) {
+      console.log('🔧 DEV MODE: Billing API unavailable (403). Using development bypass...');
+      console.log('🔧 DEV MODE: Directly upgrading store to premium (NO REAL CHARGE)');
+      
+      // Directly update store to premium tier in database (no actual Shopify charge)
+      const { error: devUpdateError } = await supabase
+        .from('stores')
+        .update({
+          subscription_tier: 'premium',
+          plan_name: planType,
+          billing_status: 'active', // Mark as active immediately in dev mode
+          shopify_charge_id: `dev_mock_${Date.now()}`, // Mock charge ID
+          last_charge_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', storeId);
+
+      if (devUpdateError) {
+        console.error('Error updating store in dev mode:', devUpdateError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to update subscription in development mode',
+          error: devUpdateError.message
+        });
+      }
+
+      console.log('✅ DEV MODE: Store upgraded to premium successfully (mock billing)');
+      
+      // Return success response that mimics the real flow
+      // Instead of a confirmationUrl, we indicate success immediately
+      return res.json({
+        success: true,
+        devMode: true,
+        message: 'Subscription activated successfully (Development Mode - No actual charge)',
+        planName: planConfig.name,
+        price: planConfig.price,
+        tier: 'premium',
+        // No confirmationUrl - frontend should handle this as immediate success
+        directUpgrade: true
+      });
+    }
+
+    // If not in dev mode and billing failed, return error as usual
     if (!chargeResult.success || !chargeResult.charge) {
       console.error('Failed to create Shopify charge:', chargeResult.error);
       console.error('Full charge result:', chargeResult);
@@ -92,7 +142,8 @@ const createSubscription = async (req, res) => {
         success: false,
         message: 'Failed to create subscription charge',
         error: chargeResult.error,
-        details: chargeResult
+        details: chargeResult,
+        hint: 'Enable DEV_BILLING_BYPASS=true in .env for development testing'
       });
     }
 
@@ -300,16 +351,25 @@ const cancelSubscription = async (req, res) => {
       });
     }
 
-    // Cancel charge via Shopify API
-    const cancelResult = await shopifyApi.cancelRecurringCharge(
-      store.shopify_domain,
-      store.shopify_access_token,
-      store.shopify_charge_id
-    );
+    // Check if this is a dev mode charge (mock charge ID)
+    const isDevCharge = store.shopify_charge_id.startsWith('dev_mock_');
+    const devBypassEnabled = process.env.DEV_BILLING_BYPASS === 'true';
 
-    if (!cancelResult.success) {
-      console.error('Failed to cancel Shopify charge:', cancelResult.error);
-      // Continue anyway to update our database
+    if (isDevCharge && devBypassEnabled) {
+      console.log('🔧 DEV MODE: Canceling mock subscription (no real Shopify API call)');
+      // Skip Shopify API call for dev mode charges
+    } else {
+      // Cancel charge via Shopify API
+      const cancelResult = await shopifyApi.cancelRecurringCharge(
+        store.shopify_domain,
+        store.shopify_access_token,
+        store.shopify_charge_id
+      );
+
+      if (!cancelResult.success) {
+        console.error('Failed to cancel Shopify charge:', cancelResult.error);
+        // Continue anyway to update our database
+      }
     }
 
     // Downgrade store to free tier
